@@ -1,0 +1,67 @@
+/**
+ * @file motor_gb4310.h
+ * @brief GB4310电机参数配置
+ * 
+ * 电机型号：GB4310
+ */
+
+#ifndef __MOTOR_GB4310_H__
+#define __MOTOR_GB4310_H__
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+// ========== 基本电气参数 ==========
+#define MOTOR_GB4310_NOMINAL_VOLTAGE         24.0f      // 额定电压 (V)
+#define MOTOR_GB4310_NOMINAL_CURRENT         0.9f       // 额定电流 (A)
+#define MOTOR_GB4310_NOMINAL_TORQUE          0.2f       // 额定扭矩 (N.M)
+#define MOTOR_GB4310_NOMINAL_SPEED           504.0f     // 额定转速 (rpm)
+
+// ========== 极限参数 ==========
+#define MOTOR_GB4310_MAX_SPEED               1028.0f    // 最大转速 (rpm)
+#define MOTOR_GB4310_STALL_TORQUE            0.49f      // 堵转扭矩 (N.M)
+#define MOTOR_GB4310_STALL_CURRENT           1.9f       // 堵转电流 (A)
+
+// ========== 电机绕组参数 ==========
+#define MOTOR_GB4310_WINDING_TURNS           60         // 绕线匝数 (T)
+#define MOTOR_GB4310_PHASE_RESISTANCE        10.32f     // 相电阻 (Ω)
+#define MOTOR_GB4310_PHASE_INDUCTANCE        3.26f      // 相电感 (mH)
+
+// ========== 电机常数 ==========
+#define MOTOR_GB4310_SPEED_CONSTANT          34.4f      // 转速常数 (rpm/V)
+#define MOTOR_GB4310_TORQUE_CONSTANT         0.23f      // 扭矩常数 (N.M/A)
+
+// ========== 机械参数 ==========
+#define MOTOR_GB4310_ROTOR_INERTIA           202.0f     // 转子惯量 (g·cm²)
+#define MOTOR_GB4310_POLE_PAIRS              14         // 极对数 (Pairs)
+#define MOTOR_GB4310_WEIGHT_WITHOUT_ENCODER  112.0f     // 电机重量不带编码器 (g)
+#define MOTOR_GB4310_WEIGHT_WITH_ENCODER     128.0f     // 电机重量带编码器 (g)
+
+// ========== 温度参数 ==========
+#define MOTOR_GB4310_WORKING_TEMP_MIN        20.0f      // 工作温度范围最小值 (℃)
+#define MOTOR_GB4310_WORKING_TEMP_MAX        80.0f      // 工作温度范围最大值 (℃)
+#define MOTOR_GB4310_MAX_DEMAGNETIZE_TEMP    120.0f     // 最高退磁温度 (℃)
+
+
+// ========== 计算得到的参数 ==========
+// 电角速度 = 机械角速度 * 极对数
+// 机械角速度 (rad/s) = RPM * 2π / 60
+#define MOTOR_GB4310_RPM_TO_ELEC_RAD_PER_SEC(rpm)  ((rpm) * 6.28318530718f / 60.0f * MOTOR_GB4310_POLE_PAIRS)
+#define MOTOR_GB4310_ELEC_RAD_PER_SEC_TO_RPM(elec_rad_per_sec)  ((elec_rad_per_sec) * 60.0f / 6.28318530718f / MOTOR_GB4310_POLE_PAIRS)
+
+// 反电动势常数 (V·s/rad) = 扭矩常数 (N·m/A)
+#define MOTOR_GB4310_BACK_EMF_CONSTANT       MOTOR_GB4310_TORQUE_CONSTANT
+
+// 电气时间常数 (ms) = L / R
+#define MOTOR_GB4310_ELECTRICAL_TIME_CONSTANT_MS  ((MOTOR_GB4310_PHASE_INDUCTANCE / 1000.0f) / MOTOR_GB4310_PHASE_RESISTANCE * 1000.0f)
+
+
+
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* __MOTOR_GB4310_H__ */
+

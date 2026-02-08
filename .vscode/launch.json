@@ -1,0 +1,51 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug (STM32G431CBU6)",
+            "type": "cortex-debug",
+            "request": "launch",
+            "servertype": "openocd",
+            "cwd": "${workspaceFolder}",
+            "executable": "build/Debug/my_foc.elf",
+            "device": "STM32G431CBU6",
+            "svdFile": "",
+            "runToEntryPoint": "main",
+            "armToolchainPath": "D:/qrs-software/STM32CubeCLT_1.18.0/GNU-tools-for-STM32/bin",
+            "liveWatch": {
+                "enabled": true,
+                "samplesPerSecond": 4
+            },
+            "configFiles": [
+                "interface/stlink.cfg",
+                "target/stm32g4x.cfg"
+            ],
+            "openOCDLaunchCommands": [
+                "adapter speed 4000"
+            ]
+        },
+        {
+            "name": "Debug (STM32G431CBU6-DAP)",
+            "type": "cortex-debug",
+            "request": "launch",
+            "servertype": "openocd",
+            "cwd": "${workspaceFolder}",
+            "executable": "build/Debug/my_foc.elf",
+            "device": "STM32G431CBU6",
+            "svdFile": "",
+            "runToEntryPoint": "main",
+            "armToolchainPath": "D:/qrs-software/STM32CubeCLT_1.18.0/GNU-tools-for-STM32/bin",
+            "liveWatch": {
+                "enabled": true,
+                "samplesPerSecond": 4
+            },
+            "configFiles": [
+                "interface/cmsis-dap.cfg",
+                "target/stm32g4x.cfg"
+            ],
+            "openOCDLaunchCommands": [
+                "adapter speed 4000"
+            ]
+        }
+    ]
+}
