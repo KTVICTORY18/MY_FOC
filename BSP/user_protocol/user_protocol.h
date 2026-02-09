@@ -24,6 +24,8 @@ extern "C" {
 uint8_t CRC8_Calculate(const uint8_t *data, uint16_t length);
 void Protocol_Parse(const uint8_t *data, uint16_t length);
 
+extern uint8_t calibrated_flag;//主循环调用的校准标志位
+
 #ifdef __cplusplus
 }
 #endif

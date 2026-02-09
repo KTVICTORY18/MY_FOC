@@ -2,6 +2,9 @@
 #include "storage.h"
 #include <string.h>
 
+
+uint8_t calibrated_flag = 0;
+
 /**
  * @brief CRC8校验计算（多项式0x07）
  * @param data 数据指针
@@ -87,7 +90,7 @@ void Protocol_Parse(const uint8_t *data, uint16_t length)
             {
                 // 提取第二个float
                 memcpy(&value2, &data[7], sizeof(float));
-                
+                //AA 01 05 C3 F5 48 40 00 00 A0 41 9A FF以200r/min的速度运动到3.14rad
                 // 调用速度+角度模式函数
                 FOC_Set_Speed_Angle(value1, value2);  // value1=角度, value2=速度
             }
@@ -104,7 +107,7 @@ void Protocol_Parse(const uint8_t *data, uint16_t length)
         //AA 02 0E FF
         case FUNC_CODE_CALIBRATE:  
         {
-            
+            config_info.calibrated = 0;
             // CRC校验（校验范围：功能码 + Mode字节）
             uint8_t crc_received = data[length - 2];
             uint8_t crc_calculated = CRC8_Calculate(&data[1], 1);  // 功能码 + Mode字节
@@ -113,10 +116,7 @@ void Protocol_Parse(const uint8_t *data, uint16_t length)
             {
                 return;
             }
-            // 执行FOC校准
-            FOC_Calibrate();
-            // 保存配置到Flash
-            Storage_WriteConfig(&config_info);
+            calibrated_flag = 1;
             break;
         }
         //读取配置信息功能码 0x03

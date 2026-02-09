@@ -32,7 +32,8 @@ void CurrentSense_Init(void)
     current_sense.iv_offset = 0.0f;
     current_sense.iw_offset = 0.0f;
     
-    HAL_ADCEx_Calibration_Start(&hadc1, ADC_SINGLE_ENDED);//启用adc校准
+    HAL_ADCEx_Calibration_Start(&hadc1, ADC_SINGLE_ENDED);//启用adc1校准
+    HAL_ADCEx_Calibration_Start(&hadc2, ADC_SINGLE_ENDED);//启用adc2校准，读vbat电压
     //tim1的trgo触发是4通道的pwm信号
 }
 

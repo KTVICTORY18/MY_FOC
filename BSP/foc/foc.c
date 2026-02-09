@@ -208,7 +208,6 @@ void FOC_Init(void)
     PID_Angle.is_integral_enable = 0;//不使用积分限幅
     PID_SetGains(&PID_Angle, KP_ANGLE, KI_ANGLE, KD_ANGLE);
 
-    //使用tim2的us计数器来记录时间
     HAL_TIM_Base_Start_IT(&htim2);   
 
       // 启动三相PWM输出（必须在CurrentSense_Start之前启动）
@@ -229,7 +228,7 @@ void FOC_Calibrate(void){
     
     /*1.校准电流偏置*/
     FOC_SetPhaseVoltage(0.0f, 0.0f, 0.0f); // 设置电压为0
-    HAL_Delay(30);
+    
     config_info.iu_offset = 0.0f;
     config_info.iv_offset = 0.0f;
     config_info.iw_offset = 0.0f;
@@ -343,6 +342,8 @@ void FOC_Set_Parameter(FOC_Mode_t mode,float value){
         case FOC_MODE_LOW_SPEED_LOOP:
             low_speed = value;
             low_speed_angle = angle_data.angle_rad;
+            last_angle = angle_data.angle_rad;
+            previous_angle = angle_data.angle_rad;
             break;
         case FOC_MODE_STEP_ANGLE_LOOP://步进模式
             if(foc_ctrl.mode == FOC_MODE_STEP_ANGLE_LOOP){//在当前的位置上移动一定角度
@@ -472,7 +473,8 @@ void FOC_Current_Loop_Update(void)
     float temp = angle_data.angle_rad - last_angle;
     if(last_angle-angle_data.angle_rad > FOC_PI) temp+=FOC_2PI;
     else if(last_angle-angle_data.angle_rad < -FOC_PI) temp-=FOC_2PI;
-    foc_ctrl.current_speed =  LowPassFilter_2_Order_Update(&SpeedFilter, temp * 60.0f * FOC_UPDATE_FREQ / FOC_2PI);
+    //temp * 60.0f * FOC_UPDATE_FREQ / FOC_2PI原始值
+    foc_ctrl.current_speed = (temp * 60.0f * FOC_UPDATE_FREQ / FOC_2PI)*0.5+foc_ctrl.current_speed*0.5;//使用一阶滤波
     last_angle = angle_data.angle_rad;
     
     /** 5. PID电流控制 **/

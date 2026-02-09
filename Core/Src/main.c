@@ -34,6 +34,7 @@
 #include "current_sense.h"
 #include "myUsart.h"
 #include "storage.h"
+#include "user_protocol.h"
 
 // 外部变量声明（用于时间测量）
 extern TIM_HandleTypeDef htim2;
@@ -119,18 +120,19 @@ int main(void)
   // 初始化电流采样模块
   CurrentSense_Init();
   //上电读取一下母线电压
-  // FOC_Read_Vbat_Voltage();
-  // FOC_Update_PID_Parameter();//根据电压更新pid参数
+  FOC_Read_Vbat_Voltage();
+  FOC_Update_PID_Parameter();//根据电压更新pid参数
   // 启动电流采样（会启动ADC注入转换）
   CurrentSense_Start();
-  float electrical_angle = 0.0f;//电角度
-  // //FOC校准
-  // Storage_ReadConfig(&config_info);//第一次读取是0xFF calibrated
-  // if(config_info.calibrated != 1){//检测是否校准过
-  //   FOC_Calibrate();//校准
-  //   Storage_WriteConfig(&config_info);//写入配置信息
-  // }
-  // MyUsart_Init_DMA_Receive();//启动串口2的dma接收
+  // float electrical_angle = 0.0f;//电角度
+  //FOC校准
+  Storage_ReadConfig(&config_info);//第一次读取是0xFF calibrated
+  if(config_info.calibrated != 1){//检测是否校准过
+    FOC_Calibrate();//校准
+    Storage_WriteConfig(&config_info);//写入配置信息
+  }
+  MyUsart_Init_DMA_Receive();//启动串口2的dma接收
+  // FOC_Set_Parameter(FOC_MODE_LOW_SPEED_LOOP, 10.0f);
 
   /* USER CODE END 2 */
 
@@ -141,8 +143,14 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    electrical_angle += 0.1f;
-    FOC_SetPhaseVoltage(0.0f, 0.2f, electrical_angle);
+    // electrical_angle += 0.1f;
+    // FOC_SetPhaseVoltage(0.0f, 0.2f, electrical_angle);
+    if(calibrated_flag == 1){
+      FOC_Calibrate();//是否校准的标志位是is_calibrated
+      Storage_WriteConfig(&config_info);//写入配置信息
+      calibrated_flag = 0;
+    }
+    MyUsart_SendAllCurrentsFromGlobal();
     HAL_Delay(1);
   }
   /* USER CODE END 3 */
@@ -210,10 +218,9 @@ void HAL_ADCEx_InjectedConvCpltCallback(ADC_HandleTypeDef* hadc)
         // 在这里同步读取角度和电流，然后执行FOC更新，确保数据时间戳一致
         // 调试：如果这个回调都没有进入，说明ADC中断没有被触发
         // 请检查：1. TIM1是否运行 2. TRGO是否产生 3. ADC注入转换是否启动
-        // CurrentSense_Update();
+        CurrentSense_Update();
         //执行foc的电流环更新
-        // FOC_Current_Loop_Update();
-        // HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_11);
+        FOC_Current_Loop_Update();
     }
 }
 
@@ -222,8 +229,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
   if (htim->Instance == TIM2)// tim2的计时是1khz
   {
     //执行foc的角度环和速度环更新
-    // FOC_Angle_And_Speed_Update();
-    // HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_11);
+    FOC_Angle_And_Speed_Update();
   }
 }
 

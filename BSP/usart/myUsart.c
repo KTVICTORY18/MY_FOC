@@ -76,7 +76,7 @@ void MyUsart_SendAll(float iq, float id, float iu, float iv, float iw, float ud,
     if (len > 0 && len < USART2_TX_BUFFER_SIZE)
     {
         // 等待上一次DMA传输完成
-        while (HAL_UART_GetState(&huart2) != HAL_UART_STATE_READY)
+        while (huart2.gState != HAL_UART_STATE_READY)
         {
             // 如果DMA正在传输，等待完成
             if (HAL_UART_GetState(&huart2) == HAL_UART_STATE_BUSY_TX)
