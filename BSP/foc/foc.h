@@ -39,7 +39,6 @@ extern "C" {
 #define FOC_2PI                 (2.0f * FOC_PI)
 #define FOC_SQRT3               1.7320508075688772f
 #define INV_SQRT3        0.577350269f
-#define FOC_VOLTAGE_Current      12.4f  //当前pid调参使用的电压
 #define FOC_UPDATE_FREQ_SPEED_ANGLE 1000.0f //速度环和角度环的更新频率
 #define FOC_POLE_PAIRS 14 //极对数
 // ADC电池电压读取配置
@@ -142,6 +141,7 @@ void FOC_FastSinCos(float angle, float *sin_val, float *cos_val);
 void FOC_Set_Parameter(FOC_Mode_t mode,float value);
 void FOC_Update_PID_Parameter(void);
 void FOC_Set_Speed_Angle(float target_angle, float target_speed);
+void FOC_Set_Step_Speed_Angle(float step_angle, float target_speed);
 #ifdef __cplusplus
 }
 #endif

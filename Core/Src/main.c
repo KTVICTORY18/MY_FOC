@@ -35,6 +35,7 @@
 #include "myUsart.h"
 #include "storage.h"
 #include "user_protocol.h"
+#include "can_comm.h"
 
 // 外部变量声明（用于时间测量）
 extern TIM_HandleTypeDef htim2;
@@ -113,6 +114,7 @@ int main(void)
   MX_CORDIC_Init();
   MX_TIM2_Init();
   /* USER CODE BEGIN 2 */
+  CAN_Comm_Init();//初始化fdcan通信
   // 初始化MT6825GT编码器（必须在SPI初始化之后）
   MT6825_Init();
   // 初始化FOC
@@ -128,6 +130,7 @@ int main(void)
   //FOC校准
   Storage_ReadConfig(&config_info);//第一次读取是0xFF calibrated
   if(config_info.calibrated != 1){//检测是否校准过
+    config_info.motor_id = 0;//默认id为0
     FOC_Calibrate();//校准
     Storage_WriteConfig(&config_info);//写入配置信息
   }

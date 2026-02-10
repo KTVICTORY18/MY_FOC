@@ -3,6 +3,8 @@
 #include "stm32g4xx_hal.h"
 #include "stm32g4xx_hal_tim.h"
 
+//逆时针是正转,顺时针是反转
+
 // 外部变量声明
 extern ADC_HandleTypeDef hadc2;
 extern CORDIC_HandleTypeDef hcordic;
@@ -136,7 +138,7 @@ void FOC_SetPhaseVoltage(float ud, float uq, const float electrical_angle)
     FOC_SetPhaseVoltage_Fast(ud, uq, cos_angle, sin_angle);
 }
 
-//更新id和iq的pid参数如果电压变化的话,FOC_VOLTAGE_Current是当前pid调参使用的电压
+//更新id和iq的pid参数如果电压变化的话
 void FOC_Update_PID_Parameter(void){
     float factor = 1.0f / foc_ctrl.vbat_voltage;
     PID_Inc_SetGains(&PID_IQ, PID_IQ.kp*factor, PID_IQ.ki*factor, PID_IQ.kd*factor);
@@ -221,8 +223,7 @@ void FOC_Init(void)
 //foc校准
 //编码器角度是逆时针增大，电角度也是
 void FOC_Calibrate(void){
-    config_info.calibrated = 0; // 标记为未校准
-    
+    config_info.calibrated = 0; // 标记为未校准    
     /*1.校准电流偏置*/
     FOC_SetPhaseVoltage(0.0f, 0.0f, 0.0f); // 设置电压为0
     
@@ -319,9 +320,26 @@ void FOC_Calibrate(void){
     config_info.calibrated = 1; // 标记为已校准
 }
 
+//设置在当前的角度基础上以多少速度运动多少角度
+void FOC_Set_Step_Speed_Angle(float step_angle, float target_speed){
+    MT6825_ReadAngleData(&angle_data);//在当前角度的基础上移动一定的角度
+    float current_angle = angle_data.angle_rad;
+    float target_angle = current_angle + step_angle;
+    
+    // 归一化到[0, 2π]
+    while(target_angle >= FOC_2PI) target_angle -= FOC_2PI;
+    while(target_angle < 0.0f) target_angle += FOC_2PI;
+    if(step_angle < 0.0f) target_speed = -target_speed;
+    
+    // 调用速度+角度模式
+    FOC_Set_Speed_Angle(target_angle, target_speed);
+}
+
 //设置位置速度模式
 //偏差为0.0057度
 //弧度为0.0001
+//这个是移动到角度编码器的绝对位置
+//这个位置只有0到2π之间
 void FOC_Set_Speed_Angle(float target_angle, float target_speed){
     move_target_angle = target_angle;
     foc_ctrl.mode = FOC_MODE_SPEED_ANGLE_LOOP;
@@ -350,6 +368,8 @@ void FOC_Set_Parameter(FOC_Mode_t mode,float value){
             } else {
                 foc_ctrl.target_angle = angle_data.angle_rad + value;//如果第一次设置步进模式那么就设置为当前角度加上步进的角度
             }
+            if(foc_ctrl.target_angle > FOC_2PI) foc_ctrl.target_angle -= FOC_2PI;
+            else if(foc_ctrl.target_angle < 0.0f) foc_ctrl.target_angle += FOC_2PI;
             break;
         case FOC_MODE_ANGLE_LOOP://控制达到目标角度使用最短路径,不用绕一圈才达到目标角度
             if(value - angle_data.angle_rad > FOC_PI) value -= FOC_2PI;
