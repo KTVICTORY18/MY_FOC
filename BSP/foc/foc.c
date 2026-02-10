@@ -10,7 +10,6 @@ extern MT6825_AngleData_t angle_data;
 ThreePhase_t three_phase;//三相电压
 FOC_Control_t foc_ctrl;//FOC控制结构体
 ConfigInfo_t config_info = {0};//配置信息
-LowPassFilter_2_Order_t SpeedFilter;//速度滤波器
 AlphaBeta_t alpha_beta;//αβ坐标系
 static float last_angle = 0.0f;//之前的机械角度
 
@@ -199,8 +198,6 @@ void FOC_Init(void)
     PID_Speed.is_integral_enable = 1;
     PID_SetGains(&PID_Speed, KP_SPEED, KI_SPEED, KD_SPEED);
 
-    LowPassFilter_2_Order_Init(&SpeedFilter, 0.00005f, 300.0f, 0.707f);
-
     //初始化角度环pid
     PID_Init(&PID_Angle, 0.0001f);
     PID_Angle.out_max = FOC_MAX_SPEED;
@@ -331,13 +328,15 @@ void FOC_Set_Speed_Angle(float target_angle, float target_speed){
     last_angle = angle_data.angle_rad;//如果不设置last_angle,会由于刚起步的时候速度计算错误，导致iq为最大值，电机会抽搐一下
     low_speed = target_speed;//目标速度
     low_speed_angle = angle_data.angle_rad;//记录初始位置
-    move_error = (FOC_2PI *low_speed / FOC_UPDATE_FREQ_SPEED_ANGLE/60.0f);//2ms的移动误差
+    move_error = (FOC_2PI *fabs(low_speed) / FOC_UPDATE_FREQ_SPEED_ANGLE/60.0f);//2ms的移动误差
+    //如果速度为负的，需要取绝对值
 }
 
 
 //设置三环的参数
 //这个是用户设置参数时调用不参与更新
 void FOC_Set_Parameter(FOC_Mode_t mode,float value){
+    MT6825_ReadAngleData(&angle_data);
     switch(mode){
         case FOC_MODE_LOW_SPEED_LOOP:
             low_speed = value;
@@ -371,14 +370,14 @@ void FOC_Set_Parameter(FOC_Mode_t mode,float value){
 
 //角度环和速度环的更新 1khz
 void FOC_Angle_And_Speed_Update(void){
+    MT6825_ReadAngleData(&angle_data);
     if(config_info.calibrated == 0){
-        MT6825_ReadAngleData(&angle_data);
         previous_angle = angle_data.angle_rad;
         return;//如果没有校准完成不进行角度环和速度环更新
     }
     switch(foc_ctrl.mode){//先位置环，然后速度环最后电流环
         case FOC_MODE_SPEED_ANGLE_LOOP://位置速度模式
-            if(fabs(low_speed_angle - move_target_angle) < move_error) {
+            if(fabs(angle_data.angle_rad - move_target_angle) < move_error) {
                 low_speed = 0.0f;//如果已经到达目标位置那么就速度为0
                 foc_ctrl.mode = FOC_MODE_ANGLE_LOOP;//切换到角度环锁住目标角度
                 low_speed_angle = move_target_angle;

@@ -145,10 +145,14 @@ int main(void)
     /* USER CODE BEGIN 3 */
     // electrical_angle += 0.1f;
     // FOC_SetPhaseVoltage(0.0f, 0.2f, electrical_angle);
-    if(calibrated_flag == 1){
+    if(calibrated_flag == 1){//耗时操作放到主循环中
       FOC_Calibrate();//是否校准的标志位是is_calibrated
       Storage_WriteConfig(&config_info);//写入配置信息
       calibrated_flag = 0;
+    }
+    if(save_config_flag == 1){
+      Storage_WriteConfig(&config_info);//写入配置信息
+      save_config_flag = 0;
     }
     MyUsart_SendAllCurrentsFromGlobal();
     HAL_Delay(1);

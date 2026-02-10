@@ -27,7 +27,6 @@ extern "C" {
 #include "current_sense.h" // 三相电流采样
 #include "pid.h"           // 通用PID，用于电流环
 #include "MT6825GT.h"      // MT6825编码器
-#include "filter.h"        // 低通滤波器
 #include "cordic.h"        // CORDIC硬件加速器
 #include <math.h>
 
@@ -128,9 +127,6 @@ extern FOC_Control_t foc_ctrl;//FOC控制结构体
 extern ConfigInfo_t config_info;//配置信息
 extern AlphaBeta_t alpha_beta;//αβ坐标系
 
-// 滤波器
-extern LowPassFilter_2_Order_t CurrentQFilter; // Q轴电流滤波器
-extern LowPassFilter_2_Order_t CurrentDFilter; // D轴电流滤波器
 
 // FOC函数接口
 void FOC_Init(void);                        // 初始化FOC
