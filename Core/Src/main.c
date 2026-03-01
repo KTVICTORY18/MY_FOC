@@ -135,6 +135,7 @@ int main(void)
     Storage_WriteConfig(&config_info);//写入配置信息
   }
   MyUsart_Init_DMA_Receive();//启动串口2的dma接收
+  static uint8_t tx_data[8] = {0xAA, 0x01, 0x02, 0x03, 0xFF};  // 不需要4字节对齐
   // FOC_Set_Parameter(FOC_MODE_LOW_SPEED_LOOP, 10.0f);
 
   /* USER CODE END 2 */
@@ -157,7 +158,9 @@ int main(void)
       Storage_WriteConfig(&config_info);//写入配置信息
       save_config_flag = 0;
     }
-    MyUsart_SendAllCurrentsFromGlobal();
+    // MyUsart_SendAllCurrentsFromGlobal();
+    // static uint8_t tx_data[] = {0xAA, 0x01, 0x02, 0x03, 0xFF};
+    CAN_Comm_Transmit_To_ID(0x001, tx_data, 5);
     HAL_Delay(1);
   }
   /* USER CODE END 3 */

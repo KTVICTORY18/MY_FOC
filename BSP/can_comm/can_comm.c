@@ -23,7 +23,7 @@ extern FDCAN_HandleTypeDef hfdcan1;
 static uint32_t CAN_Comm_LengthToDLC(uint8_t length)
 {
     if (length <= 8)
-        return (uint32_t)length << 16;
+        return (uint32_t)length;  // 直接返回长度值，不要左移！
     else if (length <= 12)
         return FDCAN_DLC_BYTES_12;
     else if (length <= 16)
@@ -42,26 +42,39 @@ static uint32_t CAN_Comm_LengthToDLC(uint8_t length)
 
 /**
  * @brief FDCAN DLC编码转换为数据长度
- * @param dlc: FDCAN DLC编码
+ * @param dlc: FDCAN DLC编码（可能是完整的寄存器值或DLC值）
  * @return 数据长度（字节）
  */
 static uint8_t CAN_Comm_DLCToLength(uint32_t dlc)
 {
-    uint8_t length = (dlc >> 16) & 0x0F;
+    uint8_t dlc_code;
     
-    if (length <= 8)
-        return length;
-    
-    // FD格式的特殊长度
-    switch (dlc)
+    // 检查是否是完整的寄存器值（高16位有数据）
+    if (dlc > 0xF)
     {
-        case FDCAN_DLC_BYTES_12: return 12;
-        case FDCAN_DLC_BYTES_16: return 16;
-        case FDCAN_DLC_BYTES_20: return 20;
-        case FDCAN_DLC_BYTES_24: return 24;
-        case FDCAN_DLC_BYTES_32: return 32;
-        case FDCAN_DLC_BYTES_48: return 48;
-        case FDCAN_DLC_BYTES_64: return 64;
+        // 从寄存器值中提取DLC（位[16:19]）
+        dlc_code = (dlc >> 16) & 0x0F;
+    }
+    else
+    {
+        // 已经是DLC值
+        dlc_code = dlc & 0x0F;
+    }
+    
+    // 0-8字节：DLC直接对应字节数
+    if (dlc_code <= 8)
+        return dlc_code;
+    
+    // CAN FD格式的特殊长度
+    switch (dlc_code)
+    {
+        case 9:  return 12;  // FDCAN_DLC_BYTES_12
+        case 10: return 16;  // FDCAN_DLC_BYTES_16
+        case 11: return 20;  // FDCAN_DLC_BYTES_20
+        case 12: return 24;  // FDCAN_DLC_BYTES_24
+        case 13: return 32;  // FDCAN_DLC_BYTES_32
+        case 14: return 48;  // FDCAN_DLC_BYTES_48
+        case 15: return 64;  // FDCAN_DLC_BYTES_64
         default: return 8;
     }
 }
@@ -116,7 +129,6 @@ HAL_StatusTypeDef CAN_Comm_Init(void)
     {
         return HAL_ERROR;
     }
-    
     return HAL_OK;
 }
 
