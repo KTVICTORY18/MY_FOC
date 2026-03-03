@@ -205,6 +205,7 @@ void HAL_FDCAN_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo0ITs)
             uint8_t data_length = CAN_Comm_DLCToLength(RxHeader.DataLength);
             
             // 调用用户回调函数
+
             CAN_Comm_RxCallback(RxHeader.Identifier, RxData, data_length);
         }
     }
@@ -212,5 +213,5 @@ void HAL_FDCAN_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo0ITs)
 
 void CAN_Comm_RxCallback(uint32_t can_id, uint8_t *data, uint8_t length)
 {
-    
+    Protocol_Parse(data, 10);//can接收到的是控制指令
 }

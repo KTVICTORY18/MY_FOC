@@ -36,6 +36,7 @@
 #include "storage.h"
 #include "user_protocol.h"
 #include "can_comm.h"
+#include "openmv.h"
 
 // 外部变量声明（用于时间测量）
 extern TIM_HandleTypeDef htim2;
@@ -134,8 +135,9 @@ int main(void)
     FOC_Calibrate();//校准
     Storage_WriteConfig(&config_info);//写入配置信息
   }
+  OpenMV_Init(&openmv);
   MyUsart_Init_DMA_Receive();//启动串口2的dma接收
-  static uint8_t tx_data[8] = {0xAA, 0x01, 0x02, 0x03, 0xFF};  // 不需要4字节对齐
+  // static uint8_t tx_data[8] = {0xAA, 0x01, 0x02, 0x03, 0xFF};  // 不需要4字节对齐
   // FOC_Set_Parameter(FOC_MODE_LOW_SPEED_LOOP, 10.0f);
 
   /* USER CODE END 2 */
@@ -149,6 +151,9 @@ int main(void)
     /* USER CODE BEGIN 3 */
     // electrical_angle += 0.1f;
     // FOC_SetPhaseVoltage(0.0f, 0.2f, electrical_angle);
+    if(config_info.motor_id==0x02){//只有顶部的电机进行openmv数据处理和pid，计算后直接通过can总线发送给电机2
+      OpenMV_Process(&openmv);//进行openmv数据处理和pid计算
+    }
     if(calibrated_flag == 1){//耗时操作放到主循环中
       FOC_Calibrate();//是否校准的标志位是is_calibrated
       Storage_WriteConfig(&config_info);//写入配置信息
@@ -159,8 +164,7 @@ int main(void)
       save_config_flag = 0;
     }
     // MyUsart_SendAllCurrentsFromGlobal();
-    // static uint8_t tx_data[] = {0xAA, 0x01, 0x02, 0x03, 0xFF};
-    CAN_Comm_Transmit_To_ID(0x001, tx_data, 5);
+    // CAN_Comm_Transmit_To_ID(0x001, tx_data, 5);
     HAL_Delay(1);
   }
   /* USER CODE END 3 */

@@ -21,7 +21,7 @@
                 "target/stm32g4x.cfg"
             ],
             "openOCDLaunchCommands": [
-                "adapter speed 4000"
+                "adapter speed 1000"
             ]
         },
         {

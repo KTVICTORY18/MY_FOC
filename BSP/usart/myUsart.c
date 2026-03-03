@@ -1,6 +1,7 @@
 #include "myUsart.h"
 #include "MT6825GT.h"
 #include "user_protocol.h"
+#include "openmv.h"
 
 
 // DMA接收缓冲区
@@ -50,8 +51,12 @@ void MyUsart_IDLE_Callback(void)
         // 如果接收到数据，进行解析
         if (recv_length > 0)
         {
-            // 调用协议解析函数
-          Protocol_Parse(usart2_rx_buffer, recv_length);
+            if (OpenMV_ParsePacket(&openmv, usart2_rx_buffer, recv_length)) {//openmv的数据包由0xBB开头
+                // OpenMV 数据包解析成功，无需其他处理
+            } else {
+                // 不是 OpenMV 数据包，调用原有的协议解析函数（上位机命令）
+                Protocol_Parse(usart2_rx_buffer, recv_length);
+            }
         }
         
         // 清空接收缓冲区

@@ -42,13 +42,15 @@ uint8_t CRC8_Calculate(const uint8_t *data, uint16_t length)
  * 
  * 协议格式：
  * - AA + ID + 功能码 + 数据 + CRC8 + FF
- * 
+ * crc校验是从id到数据的最后一位
  * 功能码0x01: 设置模式参数（单参数模式）
  *   - 支持模式：FOC_MODE_LOW_SPEED_LOOP(0), FOC_MODE_STEP_ANGLE_LOOP(1), 
  *               FOC_MODE_SPEED_LOOP(3), FOC_MODE_CURRENT_LOOP(4)
  *   - 数据格式：AA ID 01 Mode(1字节) Value(4字节float) CRC FF
  *   - 示例：设置速度环50rpm
  *     AA 01 01 03 00 00 48 42 8E FF
+ *     设置低速环30rpm
+ *     AA 01 01 00 00 00 F0 41 9F FF
  * 
  * 功能码0x02: FOC校准并保存到Flash
  *   - 数据格式：AA ID 02 CRC FF
@@ -58,6 +60,8 @@ uint8_t CRC8_Calculate(const uint8_t *data, uint16_t length)
  *   - 数据格式：AA ID 03 NewID(1字节) CRC FF
  *   - 示例：修改为ID=1
  *     AA 00 03 01 38 FF
+ *     修改电机id为2
+ *     AA 00 03 01 00 FF
  * 
  * 功能码0x04: 设置绝对角度+速度（以指定速度运动到绝对角度）
  *   - 数据格式：AA ID 04 Angle(4字节float) Speed(4字节float) CRC FF

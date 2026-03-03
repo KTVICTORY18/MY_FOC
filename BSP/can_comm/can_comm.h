@@ -15,6 +15,7 @@ extern "C" {
 
 #include "main.h"
 #include "fdcan.h"
+#include "user_protocol.h"
 
 // CAN通信配置
 #define CAN_COMM_TARGET_ID      0x001   // 目标设备ID（接收和发送都使用ID=1）
