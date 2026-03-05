@@ -5,7 +5,6 @@
 #include "user_protocol.h"
 
 OpenMV_Handle_t openmv;
-
 /**
  * @brief 初始化 OpenMV 处理模块
  */
@@ -15,15 +14,15 @@ void OpenMV_Init(OpenMV_Handle_t *handle)
      
     // 初始化 Yaw 轴（底部电机）PID 参数
     // 根据实际情况调整这些参数
-    OpenMV_PID_Init(&handle->pid_yaw, 0.5f, 0.0f, 0.0f);
-    OpenMV_PID_Init(&handle->pid_pitch, 0.5f, 0.0f, 0.0f);
+    OpenMV_PID_Init(&handle->pid_yaw, 1.0f, 0.0f, 0.0f);
+    OpenMV_PID_Init(&handle->pid_pitch, 1.0f, 0.0f, 0.0f);
     
     handle->pid_yaw.target = 0.0f;  // 目标是中心点，偏差为0
     handle->pid_yaw.integral_limit = 100.0f;
     handle->pid_yaw.output_limit = 60.0f;  // 限制最大速度输出
     handle->pid_pitch.target = 0.0f;  // 目标是中心点，偏差为0
     handle->pid_pitch.integral_limit = 100.0f;
-    handle->pid_pitch.output_limit = 60.0f;  // 限制最大速度输出
+    handle->pid_pitch.output_limit = 100.0f;  // 限制最大速度输出60rpm
 }
 
 /**
@@ -54,7 +53,7 @@ float OpenMV_PID_Calculate(PID_Controller_t *pid, float current_value)
     // 计算误差（目标是0，即中心点）
     pid->error = pid->target - current_value;
     if(pid->error<5.0f && pid->error>-5.0f){//误差较小时不进行积分，防止积分风up
-        return 0.0f;
+        pid->error = 0.0f;
     }
     
     // 积分项累积
@@ -136,7 +135,7 @@ void OpenMV_Control_Yaw(float target_velocity_yaw){
     can_data[0] = 0xAA; // 帧头
     can_data[1] = 0x01; // 电机 ID
     can_data[2] = 0x01; // 功能码：设置速度
-    can_data[3] = 0x00;//foc模式 low_speed
+    can_data[3] = 0x03;//foc模式 low_speed
     memcpy(&can_data[4], &target_velocity_yaw, sizeof(float)); // 将 float 数据复制到 CAN 数据中
     uint8_t crc = CRC8_Calculate(&can_data[1], 7); // 计算 CRC（从 ID 开始到数据结束）
     can_data[8] = crc; // CRC 校验
@@ -155,11 +154,11 @@ void OpenMV_Process(OpenMV_Handle_t *handle)
         
         if (handle->packet.found == 0x01) {
             // 找到目标，进行 PID 控制
-            float target_velocity_yaw = OpenMV_PID_Calculate(&handle->pid_yaw, (float)handle->packet.dx);
-            float target_velocity_pitch = OpenMV_PID_Calculate(&handle->pid_pitch, (float)handle->packet.dy);
+            float target_velocity_yaw = OpenMV_PID_Calculate(&handle->pid_yaw, (float)handle->packet.dx);//通过pid计算得到目标速度
+            float target_velocity_pitch = OpenMV_PID_Calculate(&handle->pid_pitch, (float)handle->packet.dy);//通过pid计算得到目标速度
             
             OpenMV_Control_Yaw(target_velocity_yaw);//通过can控制底部电机移动
-            FOC_Set_Parameter(FOC_MODE_LOW_SPEED_LOOP, target_velocity_pitch);
+            FOC_Set_Parameter(FOC_MODE_SPEED_LOOP, target_velocity_pitch);
         } else {
             // 未找到目标，停止或保持当前位置
             handle->pid_yaw.integral = 0.0f;  // 清除积分
@@ -169,7 +168,7 @@ void OpenMV_Process(OpenMV_Handle_t *handle)
             
             OpenMV_Control_Yaw(0.0f);//通过can控制底部电机移动
             // 可以设置速度为0
-            FOC_Set_Parameter(FOC_MODE_LOW_SPEED_LOOP, 0.0f);//如果没有找到目标设置速度为0
+            FOC_Set_Parameter(FOC_MODE_SPEED_LOOP, 0.0f);//如果没有找到目标设置速度为0
         }
     }
     
@@ -177,6 +176,6 @@ void OpenMV_Process(OpenMV_Handle_t *handle)
     if (HAL_GetTick() - handle->last_update_time > 1000) {//长时间没有接收到数据包也进行停止操作
         // 超过1秒未收到数据，可以执行安全停止
         OpenMV_Control_Yaw(0.0f);//通过can控制底部电机移动
-        FOC_Set_Parameter(FOC_MODE_LOW_SPEED_LOOP, 0.0f);
+        FOC_Set_Parameter(FOC_MODE_SPEED_LOOP, 0.0f);
     }
 }
