@@ -163,7 +163,7 @@ int main(void)
       Storage_WriteConfig(&config_info);//写入配置信息
       save_config_flag = 0;
     }
-    // MyUsart_SendAllCurrentsFromGlobal();
+    MyUsart_SendAllCurrentsFromGlobal();
     // CAN_Comm_Transmit_To_ID(0x001, tx_data, 5);
     HAL_Delay(1);
   }

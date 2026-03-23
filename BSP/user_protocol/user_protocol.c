@@ -50,7 +50,7 @@ uint8_t CRC8_Calculate(const uint8_t *data, uint16_t length)
  *   - 示例：设置速度环50rpm
  *     AA 01 01 03 00 00 48 42 8E FF
  *     设置低速环30rpm
- *     AA 01 01 00 00 00 F0 41 9F FF
+ *     AA 01 01 00 00 00 F0 41 22 FF
  * 
  * 功能码0x02: FOC校准并保存到Flash
  *   - 数据格式：AA ID 02 CRC FF
