@@ -22,10 +22,10 @@ import serial
 import serial.tools.list_ports
 
 # ---------------- 阈值参数（可按需调整）----------------
-JUMP_TH_DIFF = 30
-LOCK_TH      = 10
-IMG_W        = 320
-IMG_H        = 240
+JUMP_TH_DIFF = 15          # QQVGA 分辨率下像素减半，跳变阈值同步缩小
+LOCK_TH      = 5
+IMG_W        = 160         # QQVGA
+IMG_H        = 120
 CENTER_X     = IMG_W // 2
 CENTER_Y     = IMG_H // 2
 

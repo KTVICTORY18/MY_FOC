@@ -4,7 +4,7 @@ pyb.delay(2000)
 
 sensor.reset()
 sensor.set_pixformat(sensor.RGB565)
-sensor.set_framesize(sensor.QVGA)     # 320x240 带宽够用，FPS 高
+sensor.set_framesize(sensor.QQVGA)    # 160x120 数据量更小，USB 传输更快
 sensor.skip_frames(time=500)
 sensor.set_auto_gain(False)
 sensor.set_auto_whitebal(False)
@@ -14,8 +14,8 @@ usb  = pyb.USB_VCP()
 clock = time.clock()
 
 red_threshold = (13, 49, 18, 61, 6, 47)
-IMG_W, IMG_H = 320, 240
-CENTER_X, CENTER_Y = 160, 120
+IMG_W, IMG_H = 160, 120
+CENTER_X, CENTER_Y = 80, 60
 
 # 最近一次识别结果（用在 snap 的响应里）
 _last = {
@@ -40,21 +40,22 @@ while True:
     # ------ 识别 + 发电机 ------
     clock.tick()
     img = sensor.snapshot()
+    # QQVGA 分辨率下物体像素更少，降低阈值以保持检出率
     blobs = img.find_blobs([red_threshold],
-                           pixels_threshold=120,
-                           area_threshold=120,
+                           pixels_threshold=30,
+                           area_threshold=30,
                            merge=True)
     if blobs:
         b = max(blobs, key=lambda b: b.pixels())
         cx, cy, bw, bh = b.cx(), b.cy(), b.w(), b.h()
         dx, dy = cx - CENTER_X, cy - CENTER_Y
         found_flag = 1
-        img.draw_rectangle(b.rect(), color=(0, 255, 0), thickness=2)
-        img.draw_cross(cx, cy, color=(255, 0, 0), size=10, thickness=2)
+        img.draw_rectangle(b.rect(), color=(0, 255, 0), thickness=1)
+        img.draw_cross(cx, cy, color=(255, 0, 0), size=6, thickness=1)
     else:
         cx = cy = bw = bh = dx = dy = 0
         found_flag = 0
-    img.draw_cross(CENTER_X, CENTER_Y, color=(0, 0, 255), size=12, thickness=2)
+    img.draw_cross(CENTER_X, CENTER_Y, color=(0, 0, 255), size=8, thickness=1)
 
     send_uart(found_flag, dx, dy)
 
