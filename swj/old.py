@@ -1,3 +1,4 @@
+# 原来红色小球代码的使用，不带图像传输
 import sensor, image, time, pyb, ustruct
 sensor.reset()
 sensor.set_pixformat(sensor.RGB565)
