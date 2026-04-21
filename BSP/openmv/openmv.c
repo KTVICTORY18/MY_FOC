@@ -1,6 +1,7 @@
 #include "openmv.h"
 #include "can_comm.h"
 #include <string.h>
+#include <stdio.h>
 #include <math.h>
 #include "user_protocol.h"
 
@@ -128,7 +129,7 @@ uint8_t OpenMV_ParsePacket(OpenMV_Handle_t *handle, uint8_t *data, uint16_t leng
     return 1;
 }
 
-//生成直接控制底部电机移动的帧
+// 生成直接控制底部电机移动的帧
 void OpenMV_Control_Yaw(float target_velocity_yaw){
     // 生成 CAN 数据帧，假设电机 ID 是 0x02，功能码是 0x01，数据是速度值（4 字节 float）
     uint8_t can_data[10];
@@ -141,6 +142,22 @@ void OpenMV_Control_Yaw(float target_velocity_yaw){
     can_data[8] = crc; // CRC 校验
     can_data[9] = 0xFF; // 帧尾
     CAN_Comm_Transmit_To_ID(0x001, can_data, 10); // 发送 CAN 数据帧
+}
+
+// 封装函数：将OpenMV的数据通过CAN发给ID为1的电机
+void OpenMV_Send_Data_To_ID1(OpenMV_Handle_t *handle)
+{
+    // 只在包含有效数据时发送
+    uint8_t can_data[7];
+    can_data[0] = handle->packet.header; // 0xBB
+    can_data[1] = handle->packet.found;  
+    can_data[2] = (handle->packet.dx >> 8) & 0xFF; // 高八位
+    can_data[3] = handle->packet.dx & 0xFF;        // 低八位
+    can_data[4] = (handle->packet.dy >> 8) & 0xFF; // 高八位
+    can_data[5] = handle->packet.dy & 0xFF;        // 低八位
+    can_data[6] = handle->packet.tail;   // 0xFF
+    
+    CAN_Comm_Transmit_To_ID(0x001, can_data, 7);
 }
 
 /**
@@ -159,6 +176,7 @@ void OpenMV_Process(OpenMV_Handle_t *handle)
             
             OpenMV_Control_Yaw(target_velocity_yaw);//通过can控制底部电机移动
             FOC_Set_Parameter(FOC_MODE_SPEED_LOOP, target_velocity_pitch);
+            OpenMV_Send_Data_To_ID1(handle);
         } else {
             // 未找到目标，停止或保持当前位置
             handle->pid_yaw.integral = 0.0f;  // 清除积分
@@ -169,6 +187,7 @@ void OpenMV_Process(OpenMV_Handle_t *handle)
             OpenMV_Control_Yaw(0.0f);//通过can控制底部电机移动
             // 可以设置速度为0
             FOC_Set_Parameter(FOC_MODE_SPEED_LOOP, 0.0f);//如果没有找到目标设置速度为0
+            OpenMV_Send_Data_To_ID1(handle);
         }
     }
     
@@ -179,3 +198,46 @@ void OpenMV_Process(OpenMV_Handle_t *handle)
         FOC_Set_Parameter(FOC_MODE_SPEED_LOOP, 0.0f);
     }
 }
+
+/**
+ * @brief 通过串口2的DMA打印 OpenMV 的目标偏移数据（x/y 轴偏差、是否检测到目标）
+ * @param handle OpenMV 处理句柄
+ * @note  使用 HAL_UART_Transmit_DMA 通过 huart2 发送，
+ *        发送前会等待上一次 DMA 传输完成，避免缓冲区冲突。
+ *        可在主循环或定时任务中周期性调用，例如每 100ms 调用一次。
+ */
+void OpenMV_Print_Info(OpenMV_Handle_t *handle)
+{
+    if (handle == NULL) {
+        return;
+    }
+
+    // 静态缓冲区，DMA 需要在传输期间保持数据稳定
+    static char tx_buffer[64];
+    int len;
+
+    if (handle->packet.found == 0x01) {//找到了
+        len = snprintf(tx_buffer, sizeof(tx_buffer),
+                       "%d,%6d,%6d\r\n",
+                       handle->packet.found, handle->packet.dx, handle->packet.dy);
+    } else {
+        len = snprintf(tx_buffer, sizeof(tx_buffer),
+                       "%d,%6d,%6d\r\n",
+                       handle->packet.found, handle->packet.dx, handle->packet.dy);
+    }
+
+    if (len <= 0 || len >= (int)sizeof(tx_buffer)) {
+        return;
+    }
+
+    // 等待上一次 DMA 发送完成，避免覆盖缓冲区
+    uint32_t wait = 0;
+    while (huart2.gState != HAL_UART_STATE_READY && wait++ < 100000) {
+        ;
+    }
+
+    // 通过 DMA 发送
+    HAL_UART_Transmit_DMA(&huart2, (uint8_t *)tx_buffer, (uint16_t)len);
+}
+
+

@@ -73,9 +73,9 @@ void MyUsart_SendAll(float iq, float id, float iu, float iv, float iw, float ud,
     static char tx_buffer[USART2_TX_BUFFER_SIZE];
     int len;
     
-    // 格式化字符串：iq=xxx.xxx, id=xxx.xxx, iu=xxx.xxx, iv=xxx.xxx, iw=xxx.xxx\r\n
+    // VOFA+ FireWater协议：数据用英文逗号分隔，以\n结尾
     len = snprintf(tx_buffer, USART2_TX_BUFFER_SIZE, 
-                   "%.3f, %.3f, %.3f, %.3f, %.3f, %.3f, %.3f, %.3f, %.3f, %.3f, %.3f, %.3f, %.3f, %.3f, %.3f, %.3f, %.3f, %.3f\r\n", 
+                   "%.3f, %.3f, %.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f\n", 
                    iq, id, iu, iv, iw, ud, uq, iq_ref, id_ref, target_speed, current_speed, va, vb, vc, alpha, beta, target_angle, current_angle);
     
     if (len > 0 && len < USART2_TX_BUFFER_SIZE)

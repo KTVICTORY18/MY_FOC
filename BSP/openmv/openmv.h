@@ -43,6 +43,8 @@ void OpenMV_PID_Init(PID_Controller_t *pid, float kp, float ki, float kd);
 uint8_t OpenMV_ParsePacket(OpenMV_Handle_t *handle, uint8_t *data, uint16_t length);
 float OpenMV_PID_Calculate(PID_Controller_t *pid, float current_value);
 void OpenMV_Process(OpenMV_Handle_t *handle);
+void OpenMV_Send_Data_To_ID1(OpenMV_Handle_t *handle);
+void OpenMV_Print_Info(OpenMV_Handle_t *handle);
 
 extern OpenMV_Handle_t openmv;
 

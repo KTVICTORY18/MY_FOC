@@ -550,3 +550,49 @@ void FOC_Read_Vbat_Voltage(void)
     //停止常规转换
     HAL_ADC_Stop(&hadc2);
 }
+
+/**
+ * @brief 阻塞式三相PWM输出测试
+ *
+ * 该函数会在调用时生成三相正弦占空比（以 0.5 为中点），持续 duration_ms 毫秒。
+ * 注意：
+ * - amplitude 切勿过大（<0.5），推荐不超过 0.49f，否则占空比可能越界被钳位导致失真
+ * - 该函数为阻塞实现，内部使用 HAL_Delay(1) 每 1ms 更新一次占空比
+ * - 在测试期间请确保电机安全固定，电源与驱动允许输出对应电压
+ */
+void FOC_TestThreePhasePWM(float amplitude, float test_freq_hz, uint32_t duration_ms)
+{
+    if (amplitude < 0.0f) amplitude = -amplitude;
+    if (amplitude > 0.49f) amplitude = 0.49f; // 限位，避免饱和
+    if (test_freq_hz <= 0.0f) test_freq_hz = 1.0f; // 最低频率保障
+    if (duration_ms == 0) return;
+
+    const float two_pi = FOC_2PI;
+    float phase = 0.0f;
+    float dphase = two_pi * test_freq_hz / 1000.0f; // 每 1ms 增量
+
+    uint32_t steps = duration_ms; // 以1ms步进
+    for (uint32_t i = 0; i < steps; i++) {
+        float s1, c1, s2, c2, s3, c3;
+        // 三相相位： 0, -120deg, +120deg
+        FOC_FastSinCos(phase, &s1, &c1);
+        FOC_FastSinCos(phase - (two_pi / 3.0f), &s2, &c2);
+        FOC_FastSinCos(phase + (two_pi / 3.0f), &s3, &c3);
+
+        float d1 = 0.5f + amplitude * s1;
+        float d2 = 0.5f + amplitude * s2;
+        float d3 = 0.5f + amplitude * s3;
+
+        // 写占空比到比较寄存器
+        FOC_SetDuty(d1, d2, d3);
+
+        HAL_Delay(1);
+
+        phase += dphase;
+        while (phase >= two_pi) phase -= two_pi;
+        while (phase < 0.0f) phase += two_pi;
+    }
+
+    // 恢复为中性占空比（静止）
+    FOC_SetDuty(0.5f, 0.5f, 0.5f);
+}

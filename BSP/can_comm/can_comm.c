@@ -7,6 +7,9 @@
  */
 
 #include "can_comm.h"
+#include <string.h>
+#include <stdio.h>
+#include "openmv.h"
 
 // 外部FDCAN句柄
 extern FDCAN_HandleTypeDef hfdcan1;
@@ -213,5 +216,17 @@ void HAL_FDCAN_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo0ITs)
 
 void CAN_Comm_RxCallback(uint32_t can_id, uint8_t *data, uint8_t length)
 {
-    Protocol_Parse(data, 10);//can接收到的是控制指令
+    if (data[0] == 0xBB && data[length - 1] == 0xFF) {
+        // OpenMV数据：填充到全局 openmv 句柄，并调用统一的打印函数
+        openmv.packet.header = data[0];
+        openmv.packet.found  = data[1];
+        openmv.packet.dx     = (int16_t)((data[2] << 8) | data[3]);
+        openmv.packet.dy     = (int16_t)((data[4] << 8) | data[5]);
+        openmv.packet.tail   = data[6];
+        openmv.last_update_time = HAL_GetTick();
+
+        OpenMV_Print_Info(&openmv);
+    } else {
+        Protocol_Parse(data, 10);//can接收到的是控制指令
+    }
 }

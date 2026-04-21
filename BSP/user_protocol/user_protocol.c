@@ -61,7 +61,7 @@ uint8_t CRC8_Calculate(const uint8_t *data, uint16_t length)
  *   - 示例：修改为ID=1
  *     AA 00 03 01 38 FF
  *     修改电机id为2
- *     AA 00 03 01 00 FF
+ *     AA 00 03 02 31 FF
  * 
  * 功能码0x04: 设置绝对角度+速度（以指定速度运动到绝对角度）
  *   - 数据格式：AA ID 04 Angle(4字节float) Speed(4字节float) CRC FF

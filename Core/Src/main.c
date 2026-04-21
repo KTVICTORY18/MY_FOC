@@ -90,11 +90,13 @@ int main(void)
   /* MCU Configuration--------------------------------------------------------*/
 
   /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
+
+
   HAL_Init();
 
   /* USER CODE BEGIN Init */
 
-  /* USER CODE END Init */
+  /* USER CODE END Init */ 
 
   /* Configure the system clock */
   SystemClock_Config();
@@ -104,7 +106,7 @@ int main(void)
   /* USER CODE END SysInit */
 
   /* Initialize all configured peripherals */
-  MX_GPIO_Init();
+  MX_GPIO_Init(); 
   MX_DMA_Init();
   MX_ADC1_Init();
   MX_ADC2_Init();
@@ -139,7 +141,8 @@ int main(void)
   MyUsart_Init_DMA_Receive();//启动串口2的dma接收
   // static uint8_t tx_data[8] = {0xAA, 0x01, 0x02, 0x03, 0xFF};  // 不需要4字节对齐
   // FOC_Set_Parameter(FOC_MODE_LOW_SPEED_LOOP, 10.0f);
-
+  // float electrical_angle = 0.0f;//电角度
+  // FOC_SetDuty(0.2f, 0.5f, 0.7f);
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -151,6 +154,7 @@ int main(void)
     /* USER CODE BEGIN 3 */
     // electrical_angle += 0.1f;
     // FOC_SetPhaseVoltage(0.0f, 0.2f, electrical_angle);
+    // FOC_SetDuty(0.2f, 0.5f, 0.7f);
     if(config_info.motor_id==0x02){//只有顶部的电机进行openmv数据处理和pid，计算后直接通过can总线发送给电机2
       OpenMV_Process(&openmv);//进行openmv数据处理和pid计算
     }
@@ -163,7 +167,7 @@ int main(void)
       Storage_WriteConfig(&config_info);//写入配置信息
       save_config_flag = 0;
     }
-    MyUsart_SendAllCurrentsFromGlobal();
+    // MyUsart_SendAllCurrentsFromGlobal();
     // CAN_Comm_Transmit_To_ID(0x001, tx_data, 5);
     HAL_Delay(1);
   }
