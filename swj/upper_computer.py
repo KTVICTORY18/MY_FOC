@@ -3,6 +3,8 @@
 STM32 目标追踪云台系统数据监控 (上位机)
 - 左：OpenMV USB 实时图像
 - 右：追踪数据（dx / dy 分开显示）
+- 电机控制页：速度控制、绝对/相对位置控制、校准
+背面左边上下是绿黄，最下面两个，右边是倒数第四个开始红黑
 """
 
 import sys
@@ -15,7 +17,8 @@ from PyQt5.QtGui import QImage, QPixmap, QFont, QMouseEvent
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QLabel, QPushButton,
     QComboBox, QHBoxLayout, QVBoxLayout, QGroupBox,
-    QFrame, QSizePolicy
+    QFrame, QSizePolicy, QStackedWidget, QDoubleSpinBox,
+    QSpinBox, QTextEdit, QScrollArea, QRadioButton, QButtonGroup
 )
 
 import serial
@@ -28,6 +31,119 @@ IMG_W        = 160         # QQVGA
 IMG_H        = 120
 CENTER_X     = IMG_W // 2
 CENTER_Y     = IMG_H // 2
+
+# ---------------- 颜色常量 ----------------
+BG_COLOR     = "#1b1d23"
+BG_COLOR_ALT = "#2a2d34"
+TITLE_BG     = "#1b1d23"
+BORDER_COLOR = "#333a44"
+TEXT_COLOR   = "#e6edf3"
+SUB_COLOR    = "#9aa5b1"
+ACCENT       = "#2f81f7"
+
+# ============================================================
+#              电机控制协议（user_protocol.h 一一对应）
+# ============================================================
+PROTOCOL_HEADER = 0xAA
+PROTOCOL_TAIL   = 0xFF
+
+FUNC_CODE_SET_PARAMETER   = 0x01
+FUNC_CODE_CALIBRATE       = 0x02
+FUNC_CODE_MODIFY_ID       = 0x03
+FUNC_CODE_ABS_ANGLE_SPEED = 0x04
+FUNC_CODE_REL_ANGLE_SPEED = 0x05
+
+FOC_MODE_LOW_SPEED_LOOP   = 0x00
+FOC_MODE_STEP_ANGLE_LOOP  = 0x01
+FOC_MODE_SPEED_LOOP       = 0x03
+FOC_MODE_CURRENT_LOOP     = 0x04
+
+
+def crc8(data: bytes) -> int:
+    crc = 0x00
+    for b in data:
+        crc ^= b
+        for _ in range(8):
+            crc = ((crc << 1) ^ 0x07) if (crc & 0x80) else (crc << 1)
+            crc &= 0xFF
+    return crc
+
+
+def build_set_parameter(motor_id: int, mode: int, value: float) -> bytes:
+    payload = bytes([motor_id, FUNC_CODE_SET_PARAMETER, mode]) + struct.pack("<f", value)
+    crc = crc8(payload)
+    return bytes([PROTOCOL_HEADER]) + payload + bytes([crc, PROTOCOL_TAIL])
+
+
+def build_calibrate(motor_id: int) -> bytes:
+    payload = bytes([motor_id, FUNC_CODE_CALIBRATE])
+    crc = crc8(payload)
+    return bytes([PROTOCOL_HEADER]) + payload + bytes([crc, PROTOCOL_TAIL])
+
+
+def build_abs_angle_speed(motor_id: int, angle_rad: float, speed_rpm: float) -> bytes:
+    payload = bytes([motor_id, FUNC_CODE_ABS_ANGLE_SPEED]) + struct.pack("<ff", angle_rad, speed_rpm)
+    crc = crc8(payload)
+    return bytes([PROTOCOL_HEADER]) + payload + bytes([crc, PROTOCOL_TAIL])
+
+
+def build_rel_angle_speed(motor_id: int, step_rad: float, speed_rpm: float) -> bytes:
+    payload = bytes([motor_id, FUNC_CODE_REL_ANGLE_SPEED]) + struct.pack("<ff", step_rad, speed_rpm)
+    crc = crc8(payload)
+    return bytes([PROTOCOL_HEADER]) + payload + bytes([crc, PROTOCOL_TAIL])
+
+
+# ============================================================
+#                    电机串口发送线程
+# ============================================================
+class MotorSerial(QThread):
+    status = pyqtSignal(str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._ser = None
+        self._port = ""
+        self._baud = 115200
+
+    def connect(self, port: str, baud: int = 115200) -> bool:
+        self.disconnect()
+        try:
+            self._ser = serial.Serial(port, baud, timeout=0.5, write_timeout=1.0)
+            self._port = port
+            self._baud = baud
+            self.status.emit(f"[电机] 已连接 {port} @ {baud}bps")
+            return True
+        except Exception as e:
+            self._ser = None
+            self.status.emit(f"[电机] 连接失败: {e}")
+            return False
+
+    def disconnect(self):
+        if self._ser and self._ser.is_open:
+            try:
+                self._ser.close()
+            except Exception:
+                pass
+        self._ser = None
+        self.status.emit("[电机] 已断开")
+
+    def send(self, frame: bytes) -> bool:
+        if not self._ser or not self._ser.is_open:
+            self.status.emit("[电机] 未连接，无法发送")
+            return False
+        try:
+            self._ser.write(frame)
+            self._ser.flush()
+            hex_str = " ".join(f"{b:02X}" for b in frame)
+            self.status.emit(f"[电机] 发送: {hex_str}")
+            return True
+        except Exception as e:
+            self.status.emit(f"[电机] 发送失败: {e}")
+            return False
+
+    @property
+    def is_connected(self) -> bool:
+        return self._ser is not None and self._ser.is_open
 
 
 # ============================================================
@@ -159,13 +275,6 @@ class OpenMVReader(QThread):
 #                       自定义标题栏
 # ============================================================
 TITLE_BAR_H  = 52
-BG_COLOR     = "#1b1d23"
-BG_COLOR_ALT = "#2a2d34"
-TITLE_BG     = "#1b1d23"   # 与主背景完全一致，整窗一体
-BORDER_COLOR = "#333a44"
-TEXT_COLOR   = "#e6edf3"
-SUB_COLOR    = "#9aa5b1"
-ACCENT       = "#2f81f7"
 
 
 class TitleBar(QWidget):
@@ -260,6 +369,8 @@ class MainWindow(QMainWindow):
         self.resize(1480, 860)
 
         self.openmv_thread = None
+        self.motor_serial  = MotorSerial(self)
+        self.motor_serial.status.connect(self._on_motor_status)
 
         # 跳变检测
         self._last_dx = None
@@ -291,11 +402,63 @@ class MainWindow(QMainWindow):
         self.title_bar = TitleBar(self, "STM32 目标追踪云台系统数据监控")
         outer.addWidget(self.title_bar)
 
-        # 顶部导航：与标题栏共享背景色，视觉上接成一条
+        # ── Tab 导航栏 ──
+        tab_bar = QFrame()
+        tab_bar.setObjectName("TabBar")
+        tab_bar.setFixedHeight(48)
+        tab_bar.setStyleSheet(
+            f"QFrame#TabBar{{background:{TITLE_BG};"
+            f"border-bottom:1px solid {BORDER_COLOR};}}"
+            f"QFrame#TabBar QLabel{{background:transparent;}}")
+        tab_lay = QHBoxLayout(tab_bar)
+        tab_lay.setContentsMargins(16, 4, 16, 4)
+        tab_lay.setSpacing(6)
+
+        self.btn_tab_monitor = QPushButton("📷  监控页面")
+        self.btn_tab_motor   = QPushButton("⚙️  电机控制")
+        for b in (self.btn_tab_monitor, self.btn_tab_motor):
+            b.setFixedHeight(36)
+            b.setMinimumWidth(150)
+            b.setCursor(Qt.PointingHandCursor)
+            b.setCheckable(True)
+            b.setObjectName("TabBtn")
+        self.btn_tab_monitor.setChecked(True)
+        self.btn_tab_monitor.clicked.connect(lambda: self._switch_tab(0))
+        self.btn_tab_motor.clicked.connect(lambda: self._switch_tab(1))
+        tab_lay.addWidget(self.btn_tab_monitor)
+        tab_lay.addWidget(self.btn_tab_motor)
+        tab_lay.addStretch(1)
+
+        # 状态指示（两个 Tab 共用）
+        self.status_dot = QLabel("●")
+        self.status_dot.setStyleSheet("color:#f85149;font-size:16px;background:transparent;")
+        self.lbl_status = QLabel("就绪")
+        self.lbl_status.setStyleSheet(
+            f"color:{TEXT_COLOR};font-size:14px;font-weight:600;background:transparent;")
+        tab_lay.addWidget(self.status_dot)
+        tab_lay.addWidget(self.lbl_status)
+        outer.addWidget(tab_bar)
+
+        # ── 堆叠页面 ──
+        self.stack = QStackedWidget()
+        self.stack.addWidget(self._build_monitor_page())   # index 0
+        self.stack.addWidget(self._build_motor_page())     # index 1
+        outer.addWidget(self.stack, 1)
+
+        self._apply_style()
+
+    # ---------- 监控页面 ----------
+    def _build_monitor_page(self):
+        page = QWidget()
+        page.setStyleSheet(f"background:{BG_COLOR};")
+        root = QVBoxLayout(page)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        # 顶部连接栏
         top_card = QFrame()
         top_card.setObjectName("TopBar")
         top_card.setFixedHeight(60)
-        top_card.setAutoFillBackground(True)
         top_card.setStyleSheet(
             f"QFrame#TopBar{{background:{TITLE_BG};border:none;"
             f"border-bottom:1px solid {BORDER_COLOR};}}"
@@ -306,8 +469,7 @@ class MainWindow(QMainWindow):
 
         lbl_port = QLabel("🔌  OpenMV 端口")
         lbl_port.setStyleSheet(
-            f"color:{TEXT_COLOR};font-size:15px;font-weight:700;"
-            f"background:transparent;")
+            f"color:{TEXT_COLOR};font-size:15px;font-weight:700;background:transparent;")
         top.addWidget(lbl_port)
 
         self.cb_openmv = QComboBox()
@@ -319,42 +481,24 @@ class MainWindow(QMainWindow):
         self.btn_conn_om = QPushButton("▶  连接 OpenMV")
         self.btn_refresh.setObjectName("BtnSecondary")
         self.btn_conn_om.setObjectName("BtnPrimary")
-        self.btn_refresh.setFixedHeight(38)
-        self.btn_conn_om.setFixedHeight(38)
-        self.btn_refresh.setMinimumWidth(130)
-        self.btn_conn_om.setMinimumWidth(170)
+        self.btn_refresh.setFixedHeight(38); self.btn_conn_om.setFixedHeight(38)
+        self.btn_refresh.setMinimumWidth(130); self.btn_conn_om.setMinimumWidth(170)
         self.btn_refresh.setCursor(Qt.PointingHandCursor)
         self.btn_conn_om.setCursor(Qt.PointingHandCursor)
         self.btn_refresh.clicked.connect(self.refresh_ports)
         self.btn_conn_om.clicked.connect(self.toggle_openmv)
-
         top.addWidget(self.btn_refresh)
         top.addWidget(self.btn_conn_om)
         top.addStretch(1)
+        root.addWidget(top_card)
 
-        # 状态指示圆点 + 文字
-        self.status_dot = QLabel("●")
-        self.status_dot.setStyleSheet(
-            "color:#f85149;font-size:16px;background:transparent;")
-        self.lbl_status = QLabel("就绪")
-        self.lbl_status.setStyleSheet(
-            f"color:{TEXT_COLOR};font-size:14px;font-weight:600;"
-            f"background:transparent;")
-        top.addWidget(self.status_dot)
-        top.addWidget(self.lbl_status)
-
-        outer.addWidget(top_card)
-
-        root = QVBoxLayout()
-        root.setContentsMargins(16, 14, 16, 16)
-        root.setSpacing(12)
-        outer.addLayout(root, 1)
-
-        # 主体
-        body = QHBoxLayout()
+        body_w = QWidget()
+        body_w.setStyleSheet(f"background:{BG_COLOR};")
+        body = QHBoxLayout(body_w)
+        body.setContentsMargins(16, 14, 16, 16)
         body.setSpacing(14)
 
-        # --- 左：图像 ---
+        # 左：图像
         left_box = QGroupBox("实时图像 (OpenMV USB)")
         left_lay = QVBoxLayout(left_box)
         self.lbl_image = QLabel("等待图像…")
@@ -370,11 +514,10 @@ class MainWindow(QMainWindow):
         left_lay.addWidget(self.lbl_fps, 0, Qt.AlignRight)
         body.addWidget(left_box, stretch=3)
 
-        # --- 右：数据面板 ---
+        # 右：数据
         right_box = QGroupBox("追踪数据")
         right_lay = QVBoxLayout(right_box)
         right_lay.setSpacing(10)
-
         self.val = {}
 
         def add_card(key, label_text, big=False):
@@ -384,42 +527,309 @@ class MainWindow(QMainWindow):
                 f"border:1px solid {BORDER_COLOR};border-radius:10px;}}")
             lay = QVBoxLayout(card)
             lay.setContentsMargins(14, 10, 14, 10); lay.setSpacing(4)
-            t = QLabel(label_text)
-            t.setStyleSheet(f"color:{SUB_COLOR};font-size:12px;")
-            v = QLabel("—")
-            v.setStyleSheet(
-                f"color:{TEXT_COLOR};font-size:{22 if big else 18}px;"
-                f"font-weight:700;")
+            t = QLabel(label_text); t.setStyleSheet(f"color:{SUB_COLOR};font-size:12px;")
+            v = QLabel("—"); v.setStyleSheet(
+                f"color:{TEXT_COLOR};font-size:{22 if big else 18}px;font-weight:700;")
             lay.addWidget(t); lay.addWidget(v)
             self.val[key] = v
             return card
 
-        # dx / dy 分开显示（并排两张大卡）
         dxdy_row = QHBoxLayout(); dxdy_row.setSpacing(10)
         dxdy_row.addWidget(add_card("dx", "x 轴偏移量 dx (px)", big=True))
         dxdy_row.addWidget(add_card("dy", "y 轴偏移量 dy (px)", big=True))
         right_lay.addLayout(dxdy_row)
-
         right_lay.addWidget(add_card("img_center", "图像中心点 (px)"))
         right_lay.addWidget(add_card("obj_center", "物体中心点 (px)"))
         right_lay.addWidget(add_card("found",      "是否检测到物体"))
         right_lay.addWidget(add_card("speed",      "物体移动速度 (px/s)"))
         right_lay.addWidget(add_card("capture",    "追上耗时 (ms) · 跳变起点方案"))
-
         right_lay.addStretch(1)
         body.addWidget(right_box, stretch=2)
-        root.addLayout(body, 1)
 
-        # 固定项
+        root.addWidget(body_w, 1)
+
         self.val["img_center"].setText(f"({CENTER_X}, {CENTER_Y})")
-
-        # FPS 定时
         self._fps_frames = 0
         self._fps_t0 = time.time()
         self._fps_timer = QTimer(self); self._fps_timer.timeout.connect(self._tick_fps)
         self._fps_timer.start(500)
 
-        self._apply_style()
+        return page
+
+    # ---------- 电机控制页面 ----------
+    def _build_motor_page(self):
+        page = QWidget()
+        page.setStyleSheet(f"background:{BG_COLOR};")
+        root = QVBoxLayout(page)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        # ── 顶部串口连接栏 ──
+        conn_bar = QFrame()
+        conn_bar.setObjectName("TopBar")
+        conn_bar.setFixedHeight(60)
+        conn_bar.setStyleSheet(
+            f"QFrame#TopBar{{background:{TITLE_BG};border:none;"
+            f"border-bottom:1px solid {BORDER_COLOR};}}"
+            f"QFrame#TopBar QLabel{{background:transparent;}}")
+        conn_lay = QHBoxLayout(conn_bar)
+        conn_lay.setContentsMargins(20, 10, 20, 10)
+        conn_lay.setSpacing(12)
+
+        lbl_mport = QLabel("🔌  电机串口")
+        lbl_mport.setStyleSheet(
+            f"color:{TEXT_COLOR};font-size:15px;font-weight:700;background:transparent;")
+        conn_lay.addWidget(lbl_mport)
+
+        self.cb_motor_port = QComboBox()
+        self.cb_motor_port.setMinimumWidth(280)
+        self.cb_motor_port.setFixedHeight(38)
+        conn_lay.addWidget(self.cb_motor_port)
+
+        lbl_baud = QLabel("波特率")
+        lbl_baud.setStyleSheet(f"color:{SUB_COLOR};font-size:14px;background:transparent;")
+        self.cb_baud = QComboBox()
+        for b in ["9600", "19200", "38400", "57600", "115200", "230400", "500000", "1000000"]:
+            self.cb_baud.addItem(b)
+        self.cb_baud.setCurrentText("115200")
+        self.cb_baud.setFixedHeight(38)
+        self.cb_baud.setMinimumWidth(110)
+        conn_lay.addWidget(lbl_baud)
+        conn_lay.addWidget(self.cb_baud)
+
+        self.btn_motor_refresh = QPushButton("↻  刷新")
+        self.btn_motor_conn    = QPushButton("▶  连接电机")
+        self.btn_motor_refresh.setObjectName("BtnSecondary")
+        self.btn_motor_conn.setObjectName("BtnPrimary")
+        self.btn_motor_refresh.setFixedHeight(38); self.btn_motor_conn.setFixedHeight(38)
+        self.btn_motor_refresh.setMinimumWidth(100); self.btn_motor_conn.setMinimumWidth(150)
+        self.btn_motor_refresh.setCursor(Qt.PointingHandCursor)
+        self.btn_motor_conn.setCursor(Qt.PointingHandCursor)
+        self.btn_motor_refresh.clicked.connect(self.refresh_ports)
+        self.btn_motor_conn.clicked.connect(self.toggle_motor)
+        conn_lay.addWidget(self.btn_motor_refresh)
+        conn_lay.addWidget(self.btn_motor_conn)
+        conn_lay.addStretch(1)
+        root.addWidget(conn_bar)
+
+        # ── 主体：左控制面板 + 右日志 ──
+        body_w = QWidget()
+        body_w.setStyleSheet(f"background:{BG_COLOR};")
+        body = QHBoxLayout(body_w)
+        body.setContentsMargins(16, 14, 16, 16)
+        body.setSpacing(14)
+
+        # ─── 左：控制面板 ───
+        ctrl_scroll = QScrollArea()
+        ctrl_scroll.setWidgetResizable(True)
+        ctrl_scroll.setStyleSheet(
+            f"QScrollArea{{background:{BG_COLOR};border:none;}}"
+            f"QScrollBar:vertical{{background:{BG_COLOR_ALT};width:8px;border-radius:4px;}}"
+            f"QScrollBar::handle:vertical{{background:#3a4a66;border-radius:4px;}}")
+
+        ctrl_inner = QWidget()
+        ctrl_inner.setStyleSheet(f"background:{BG_COLOR};")
+        ctrl_v = QVBoxLayout(ctrl_inner)
+        ctrl_v.setContentsMargins(4, 4, 4, 4)
+        ctrl_v.setSpacing(14)
+
+        # ── 公共参数（电机ID）──
+        id_box = QGroupBox("公共参数")
+        id_lay = QHBoxLayout(id_box)
+        id_lay.setSpacing(12)
+        id_lay.addWidget(QLabel("电机 ID"))
+        self.spin_motor_id = QSpinBox()
+        self.spin_motor_id.setRange(0, 255)
+        self.spin_motor_id.setValue(1)
+        self.spin_motor_id.setFixedHeight(36)
+        self.spin_motor_id.setMinimumWidth(80)
+        id_lay.addWidget(self.spin_motor_id)
+        id_lay.addStretch(1)
+        ctrl_v.addWidget(id_box)
+
+        # ── 控制模式选择 ──
+        mode_box = QGroupBox("控制模式")
+        mode_v = QVBoxLayout(mode_box)
+        mode_v.setSpacing(6)
+        self._mode_group = QButtonGroup(self)
+        mode_items = [
+            ("speed_loop",     "速度环控制  (0x01 + Mode=0x03)"),
+            ("low_speed_loop", "低速环控制  (0x01 + Mode=0x00)"),
+            ("abs_pos",        "绝对位置控制 (0x04)"),
+            ("rel_pos",        "相对位置控制 (0x05)"),
+            ("calibrate",      "校准触发     (0x02)"),
+        ]
+        self._mode_radios = {}
+        for key, label in mode_items:
+            rb = QRadioButton(label)
+            rb.setStyleSheet(f"color:{TEXT_COLOR};font-size:14px;")
+            self._mode_group.addButton(rb)
+            self._mode_radios[key] = rb
+            mode_v.addWidget(rb)
+        self._mode_radios["speed_loop"].setChecked(True)
+        ctrl_v.addWidget(mode_box)
+
+        # ── 速度环参数 ──
+        self._grp_speed = QGroupBox("速度环参数")
+        sp_lay = QHBoxLayout(self._grp_speed)
+        sp_lay.setSpacing(12)
+        sp_lay.addWidget(QLabel("目标速度 (rpm)"))
+        self.spin_speed_rpm = QDoubleSpinBox()
+        self.spin_speed_rpm.setRange(-1000.0, 1000.0)
+        self.spin_speed_rpm.setValue(30.0)
+        self.spin_speed_rpm.setDecimals(1)
+        self.spin_speed_rpm.setSingleStep(5.0)
+        self.spin_speed_rpm.setFixedHeight(36)
+        self.spin_speed_rpm.setMinimumWidth(120)
+        sp_lay.addWidget(self.spin_speed_rpm)
+        sp_lay.addStretch(1)
+        ctrl_v.addWidget(self._grp_speed)
+
+        # ── 低速环参数 ──
+        self._grp_low_speed = QGroupBox("低速环参数")
+        ls_lay = QHBoxLayout(self._grp_low_speed)
+        ls_lay.setSpacing(12)
+        ls_lay.addWidget(QLabel("目标速度 (rpm)"))
+        self.spin_low_speed_rpm = QDoubleSpinBox()
+        self.spin_low_speed_rpm.setRange(-200.0, 200.0)
+        self.spin_low_speed_rpm.setValue(10.0)
+        self.spin_low_speed_rpm.setDecimals(1)
+        self.spin_low_speed_rpm.setSingleStep(1.0)
+        self.spin_low_speed_rpm.setFixedHeight(36)
+        self.spin_low_speed_rpm.setMinimumWidth(120)
+        ls_lay.addWidget(self.spin_low_speed_rpm)
+        ls_lay.addStretch(1)
+        ctrl_v.addWidget(self._grp_low_speed)
+
+        # ── 绝对位置参数 ──
+        self._grp_abs = QGroupBox("绝对位置参数")
+        abs_lay = QHBoxLayout(self._grp_abs)
+        abs_lay.setSpacing(12)
+        abs_lay.addWidget(QLabel("目标角度 (°)"))
+        self.spin_abs_angle_deg = QDoubleSpinBox()
+        self.spin_abs_angle_deg.setRange(0.0, 360.0)
+        self.spin_abs_angle_deg.setValue(180.0)
+        self.spin_abs_angle_deg.setDecimals(1)
+        self.spin_abs_angle_deg.setSingleStep(5.0)
+        self.spin_abs_angle_deg.setFixedHeight(36)
+        self.spin_abs_angle_deg.setMinimumWidth(110)
+        abs_lay.addWidget(self.spin_abs_angle_deg)
+        abs_lay.addWidget(QLabel("运动速度 (rpm)"))
+        self.spin_abs_speed = QDoubleSpinBox()
+        self.spin_abs_speed.setRange(0.1, 1000.0)
+        self.spin_abs_speed.setValue(20.0)
+        self.spin_abs_speed.setDecimals(1)
+        self.spin_abs_speed.setSingleStep(5.0)
+        self.spin_abs_speed.setFixedHeight(36)
+        self.spin_abs_speed.setMinimumWidth(110)
+        abs_lay.addWidget(self.spin_abs_speed)
+        abs_lay.addStretch(1)
+        ctrl_v.addWidget(self._grp_abs)
+
+        # ── 相对位置参数 ──
+        self._grp_rel = QGroupBox("相对位置参数")
+        rel_lay = QHBoxLayout(self._grp_rel)
+        rel_lay.setSpacing(12)
+        rel_lay.addWidget(QLabel("步进角度 (°)  正=正转 负=反转"))
+        self.spin_rel_angle_deg = QDoubleSpinBox()
+        self.spin_rel_angle_deg.setRange(-3600.0, 3600.0)
+        self.spin_rel_angle_deg.setValue(90.0)
+        self.spin_rel_angle_deg.setDecimals(1)
+        self.spin_rel_angle_deg.setSingleStep(5.0)
+        self.spin_rel_angle_deg.setFixedHeight(36)
+        self.spin_rel_angle_deg.setMinimumWidth(110)
+        rel_lay.addWidget(self.spin_rel_angle_deg)
+        rel_lay.addWidget(QLabel("运动速度 (rpm)"))
+        self.spin_rel_speed = QDoubleSpinBox()
+        self.spin_rel_speed.setRange(0.1, 1000.0)
+        self.spin_rel_speed.setValue(30.0)
+        self.spin_rel_speed.setDecimals(1)
+        self.spin_rel_speed.setSingleStep(5.0)
+        self.spin_rel_speed.setFixedHeight(36)
+        self.spin_rel_speed.setMinimumWidth(110)
+        rel_lay.addWidget(self.spin_rel_speed)
+        rel_lay.addStretch(1)
+        ctrl_v.addWidget(self._grp_rel)
+
+        # ── 校准说明 ──
+        self._grp_calib = QGroupBox("校准")
+        calib_lay = QVBoxLayout(self._grp_calib)
+        calib_hint = QLabel(
+            "点击发送后将触发 FOC 校准并保存到 Flash。\n"
+            "校准期间电机会旋转，请确保无负载且处于安全状态。")
+        calib_hint.setStyleSheet(f"color:{SUB_COLOR};font-size:13px;")
+        calib_hint.setWordWrap(True)
+        calib_lay.addWidget(calib_hint)
+        ctrl_v.addWidget(self._grp_calib)
+
+        # 默认只显示当前模式对应的参数组
+        self._update_param_visibility()
+        for rb in self._mode_radios.values():
+            rb.toggled.connect(self._update_param_visibility)
+
+        # ── 发送按钮 ──
+        self.btn_motor_send = QPushButton("▶  发送控制指令")
+        self.btn_motor_send.setObjectName("BtnPrimary")
+        self.btn_motor_send.setFixedHeight(44)
+        self.btn_motor_send.setMinimumWidth(200)
+        self.btn_motor_send.setCursor(Qt.PointingHandCursor)
+        self.btn_motor_send.clicked.connect(self._on_motor_send)
+        ctrl_v.addWidget(self.btn_motor_send)
+
+        ctrl_v.addStretch(1)
+        ctrl_scroll.setWidget(ctrl_inner)
+        body.addWidget(ctrl_scroll, stretch=3)
+
+        # ─── 右：日志 ───
+        log_box = QGroupBox("串口日志")
+        log_lay = QVBoxLayout(log_box)
+        self.motor_log = QTextEdit()
+        self.motor_log.setReadOnly(True)
+        self.motor_log.setStyleSheet(
+            f"background:{BG_COLOR_ALT};color:{TEXT_COLOR};"
+            f"border:1px solid {BORDER_COLOR};border-radius:6px;"
+            f"font-family:'Consolas','Courier New';font-size:13px;")
+        log_lay.addWidget(self.motor_log)
+        btn_clear_log = QPushButton("清空日志")
+        btn_clear_log.setObjectName("BtnSecondary")
+        btn_clear_log.setFixedHeight(32)
+        btn_clear_log.clicked.connect(self.motor_log.clear)
+        log_lay.addWidget(btn_clear_log, 0, Qt.AlignRight)
+        body.addWidget(log_box, stretch=2)
+
+        root.addWidget(body_w, 1)
+        return page
+
+    def _update_param_visibility(self):
+        mode = self._current_motor_mode()
+        self._grp_speed.setVisible(mode == "speed_loop")
+        self._grp_low_speed.setVisible(mode == "low_speed_loop")
+        self._grp_abs.setVisible(mode == "abs_pos")
+        self._grp_rel.setVisible(mode == "rel_pos")
+        self._grp_calib.setVisible(mode == "calibrate")
+
+    def _current_motor_mode(self) -> str:
+        for key, rb in self._mode_radios.items():
+            if rb.isChecked():
+                return key
+        return "speed_loop"
+
+    # ---------- Tab 切换 ----------
+    def _switch_tab(self, idx: int):
+        self.stack.setCurrentIndex(idx)
+        self.btn_tab_monitor.setChecked(idx == 0)
+        self.btn_tab_motor.setChecked(idx == 1)
+        if idx == 1:
+            self._sync_motor_port_combo()
+
+    def _sync_motor_port_combo(self):
+        """把监控页的串口列表同步到电机页。"""
+        items = [self.cb_openmv.itemText(i) for i in range(self.cb_openmv.count())]
+        self.cb_motor_port.clear()
+        if items:
+            self.cb_motor_port.addItems(items)
+        else:
+            self.cb_motor_port.addItem("(无串口)")
 
     def _apply_style(self):
         self.setStyleSheet(f"""
@@ -439,33 +849,38 @@ class MainWindow(QMainWindow):
             }}
             QLabel {{ color:{TEXT_COLOR}; }}
 
-            /* 主按钮：蓝色实心 */
+            QPushButton#TabBtn {{
+                background:transparent; color:{SUB_COLOR};
+                border:none; border-radius:8px;
+                padding:0 16px; font-weight:700; font-size:14px;
+            }}
+            QPushButton#TabBtn:hover   {{ background:{BG_COLOR_ALT}; color:{TEXT_COLOR}; }}
+            QPushButton#TabBtn:checked {{
+                background:{ACCENT}; color:#ffffff;
+            }}
+
             QPushButton#BtnPrimary {{
                 background:#2f81f7; color:#ffffff; border:1px solid #2f81f7;
                 border-radius:8px; padding:0 20px;
                 font-weight:800; font-size:15px; letter-spacing:1px;
             }}
-            QPushButton#BtnPrimary:hover  {{ background:#4593ff; border-color:#4593ff; }}
-            QPushButton#BtnPrimary:pressed{{ background:#1f6feb; border-color:#1f6feb; }}
+            QPushButton#BtnPrimary:hover   {{ background:#4593ff; border-color:#4593ff; }}
+            QPushButton#BtnPrimary:pressed {{ background:#1f6feb; border-color:#1f6feb; }}
 
-            /* 次要按钮：描边 */
             QPushButton#BtnSecondary {{
                 background:{BG_COLOR}; color:{TEXT_COLOR};
                 border:1.5px solid #3a4a66; border-radius:8px;
                 padding:0 18px; font-weight:700; font-size:14px;
             }}
-            QPushButton#BtnSecondary:hover  {{
-                background:#2f81f7; color:#ffffff; border-color:#2f81f7;
-            }}
-            QPushButton#BtnSecondary:pressed{{ background:#1f6feb; border-color:#1f6feb; }}
+            QPushButton#BtnSecondary:hover   {{ background:#2f81f7; color:#ffffff; border-color:#2f81f7; }}
+            QPushButton#BtnSecondary:pressed {{ background:#1f6feb; border-color:#1f6feb; }}
 
-            /* 默认按钮（厂备） */
             QPushButton {{
                 background:#2f81f7; color:white; border:none; border-radius:6px;
                 padding:6px 18px; font-weight:700; font-size:15px;
             }}
-            QPushButton:hover  {{ background:#4593ff; }}
-            QPushButton:pressed{{ background:#1f6feb; }}
+            QPushButton:hover   {{ background:#4593ff; }}
+            QPushButton:pressed {{ background:#1f6feb; }}
 
             QComboBox {{
                 background:{TITLE_BG}; color:{TEXT_COLOR};
@@ -474,15 +889,29 @@ class MainWindow(QMainWindow):
                 font-size:14px; font-weight:600;
             }}
             QComboBox:hover {{ border-color:#2f81f7; }}
-            QComboBox::drop-down {{
-                border:none; width:24px;
-            }}
+            QComboBox::drop-down {{ border:none; width:24px; }}
             QComboBox QAbstractItemView {{
                 background:{BG_COLOR_ALT}; color:{TEXT_COLOR};
                 border:1px solid {BORDER_COLOR};
                 selection-background-color:#2f81f7;
                 selection-color:#ffffff;
                 outline:0;
+            }}
+
+            QDoubleSpinBox, QSpinBox {{
+                background:{BG_COLOR_ALT}; color:{TEXT_COLOR};
+                border:1.5px solid {BORDER_COLOR}; border-radius:6px;
+                padding:0 8px; font-size:14px;
+            }}
+            QDoubleSpinBox:focus, QSpinBox:focus {{ border-color:#2f81f7; }}
+
+            QRadioButton::indicator {{
+                width:16px; height:16px;
+                border:2px solid {BORDER_COLOR}; border-radius:8px;
+                background:{BG_COLOR_ALT};
+            }}
+            QRadioButton::indicator:checked {{
+                background:{ACCENT}; border-color:{ACCENT};
             }}
         """)
 
@@ -495,6 +924,7 @@ class MainWindow(QMainWindow):
             self.cb_openmv.addItem("(无串口)")
         else:
             self.cb_openmv.addItems(ports)
+        self._sync_motor_port_combo()
         self._set_status(f"找到 {len(ports)} 个串口")
 
     def _selected_port(self, combo):
@@ -506,7 +936,7 @@ class MainWindow(QMainWindow):
     def _set_status(self, msg):
         self.lbl_status.setText(msg)
 
-    # ---------------- 连接切换 ----------------
+    # ---------------- OpenMV 连接切换 ----------------
     def toggle_openmv(self):
         if self.openmv_thread and self.openmv_thread.isRunning():
             self.openmv_thread.stop(); self.openmv_thread.wait(1000)
@@ -529,9 +959,54 @@ class MainWindow(QMainWindow):
         self.status_dot.setStyleSheet(
             f"color:{color};font-size:18px;background:transparent;")
 
+    # ---------------- 电机串口连接切换 ----------------
+    def toggle_motor(self):
+        if self.motor_serial.is_connected:
+            self.motor_serial.disconnect()
+            self.btn_motor_conn.setText("▶  连接电机")
+            self._set_dot(False)
+            return
+        port = self._selected_port(self.cb_motor_port)
+        if not port or port.startswith("("):
+            self._on_motor_status("请先选择电机串口"); return
+        baud = int(self.cb_baud.currentText())
+        ok = self.motor_serial.connect(port, baud)
+        if ok:
+            self.btn_motor_conn.setText("■  断开电机")
+            self._set_dot(True)
+
+    def _on_motor_status(self, msg: str):
+        self._set_status(msg)
+        self.motor_log.append(msg)
+
+    # ---------------- 电机指令发送 ----------------
+    def _on_motor_send(self):
+        motor_id = self.spin_motor_id.value()
+        mode = self._current_motor_mode()
+
+        if mode == "speed_loop":
+            rpm = self.spin_speed_rpm.value()
+            frame = build_set_parameter(motor_id, FOC_MODE_SPEED_LOOP, rpm)
+        elif mode == "low_speed_loop":
+            rpm = self.spin_low_speed_rpm.value()
+            frame = build_set_parameter(motor_id, FOC_MODE_LOW_SPEED_LOOP, rpm)
+        elif mode == "abs_pos":
+            angle_rad = math.radians(self.spin_abs_angle_deg.value())
+            speed_rpm = self.spin_abs_speed.value()
+            frame = build_abs_angle_speed(motor_id, angle_rad, speed_rpm)
+        elif mode == "rel_pos":
+            step_rad  = math.radians(self.spin_rel_angle_deg.value())
+            speed_rpm = self.spin_rel_speed.value()
+            frame = build_rel_angle_speed(motor_id, step_rad, speed_rpm)
+        elif mode == "calibrate":
+            frame = build_calibrate(motor_id)
+        else:
+            return
+
+        self.motor_serial.send(frame)
+
     # ---------------- 数据回调 ----------------
     def on_openmv_frame(self, f):
-        # 1) 显示 JPEG —— 用 FastTransformation 减小缩放开销，FPS 明显提升
         img = QImage.fromData(f["jpeg"], "JPG")
         if not img.isNull():
             pm = QPixmap.fromImage(img).scaled(
@@ -540,7 +1015,6 @@ class MainWindow(QMainWindow):
             self.lbl_image.setPixmap(pm)
             self._fps_frames += 1
 
-        # 2) 更新数据
         found = f["found"]; dx = f["dx"]; dy = f["dy"]
         cx = f["cx"]; cy = f["cy"]
 
@@ -550,21 +1024,16 @@ class MainWindow(QMainWindow):
             "color:#3fb950;font-size:18px;font-weight:700;" if found
             else "color:#f85149;font-size:18px;font-weight:700;")
 
-        # dx / dy 分开显示 + 着色
         def _dxy_color(v):
-            if v > 0:  return "#58a6ff"
-            if v < 0:  return "#f0883e"
+            if v > 0: return "#58a6ff"
+            if v < 0: return "#f0883e"
             return TEXT_COLOR
         self.val["dx"].setText(f"{dx:+d}")
         self.val["dy"].setText(f"{dy:+d}")
-        self.val["dx"].setStyleSheet(
-            f"color:{_dxy_color(dx)};font-size:22px;font-weight:700;")
-        self.val["dy"].setStyleSheet(
-            f"color:{_dxy_color(dy)};font-size:22px;font-weight:700;")
+        self.val["dx"].setStyleSheet(f"color:{_dxy_color(dx)};font-size:22px;font-weight:700;")
+        self.val["dy"].setStyleSheet(f"color:{_dxy_color(dy)};font-size:22px;font-weight:700;")
 
         now = time.monotonic()
-
-        # 速度（仅在连续找到目标时计算）
         if found and self._last_cx is not None and self._last_ts is not None:
             dt = now - self._last_ts
             if dt > 1e-4:
@@ -577,10 +1046,9 @@ class MainWindow(QMainWindow):
             self._speed_px_s = 0.0
         self.val["speed"].setText(f"{self._speed_px_s:7.1f}")
 
-        # 跳变检测 & 捕获耗时
         if self._last_dx is not None:
             ddx = abs(dx - self._last_dx); ddy = abs(dy - self._last_dy)
-            if (ddx > JUMP_TH_DIFF or ddy > JUMP_TH_DIFF):
+            if ddx > JUMP_TH_DIFF or ddy > JUMP_TH_DIFF:
                 self._jump_start_ts = self._prev_ts if self._prev_ts is not None else self._last_ts
                 self._in_tracking = True
 
@@ -591,8 +1059,7 @@ class MainWindow(QMainWindow):
                 self._jump_start_ts = None
 
         status_txt = "追踪中…" if self._in_tracking else "已锁定"
-        self.val["capture"].setText(
-            f"{self._last_capture_ms:7.1f}   ({status_txt})")
+        self.val["capture"].setText(f"{self._last_capture_ms:7.1f}   ({status_txt})")
 
         self._prev_ts = self._last_ts
         self._last_ts = now
@@ -609,451 +1076,8 @@ class MainWindow(QMainWindow):
     def closeEvent(self, e):
         if self.openmv_thread and self.openmv_thread.isRunning():
             self.openmv_thread.stop(); self.openmv_thread.wait(1000)
-        super().closeEvent(e)
-
-
-# ============================================================
-def main():
-    app = QApplication(sys.argv)
-    app.setFont(QFont("Microsoft YaHei UI", 10))
-    w = MainWindow()
-    w.show()
-    sys.exit(app.exec_())
-
-
-if __name__ == "__main__":
-    main()
-# -*- coding: utf-8 -*-
-"""
-云台追踪上位机 (PyQt5) —— 仅连接 OpenMV USB
-- 左侧：显示 OpenMV 通过 USB VCP 推送的实时图像（带框和十字标记）
-- 右侧：显示识别信息
-    1) 图像中心点坐标       (固定)
-    2) 物体中心点坐标       (来自 OpenMV)
-    3) 是否检测到物体       (来自 OpenMV)
-    4) 物体移动速度 px/s    (PC 端用位移/时间差计算)
-    5) x/y 轴偏移量         (来自 OpenMV)
-    6) 捕获耗时 ms          (PC 端位置跳变方案：
-                             跳变条件——|Δdx|或|Δdy|大于阈值；
-                             起点——跳变前一帧的时间戳；
-                             终点——|dx|,|dy| 同时 <5 的一帧)
-"""
-
-import sys
-import time
-import struct
-
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
-from PyQt5.QtGui import QImage, QPixmap, QFont
-from PyQt5.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QLabel, QPushButton,
-    QComboBox, QHBoxLayout, QVBoxLayout, QGridLayout, QGroupBox,
-    QStatusBar, QFrame, QSizePolicy
-)
-
-import serial
-import serial.tools.list_ports
-
-# ---------------- 阈值参数（可按需调整）----------------
-# OpenMV 端分辨率 QVGA(320x240)
-JUMP_TH_DIFF = 30   # 像素，帧间差分阈值（判定跳变）
-LOCK_TH      = 10   # 像素，|dx|,|dy| 同时 <LOCK_TH 视为追上
-IMG_W        = 320
-IMG_H        = 240
-CENTER_X     = IMG_W // 2
-CENTER_Y     = IMG_H // 2
-
-# ============================================================
-#                    OpenMV USB 串口读取线程（拉模式）
-# ============================================================
-class OpenMVReader(QThread):
-    """
-    拉模式 USB VCP 协议：
-      PC  → OMV :  b'snap'
-      OMV → PC  :  Info(17) + JpegLen(4) + JPEG bytes
-                   Info = <B h h h h h h h h>
-                   -> found, dx, dy, cx, cy, w, h, img_w, img_h
-    """
-    frame_received = pyqtSignal(dict)       # {jpeg, found, dx, dy, cx, cy, w, h, img_w, img_h}
-    status         = pyqtSignal(str)
-
-    INFO_SIZE = 17
-
-    def __init__(self, port, baud=115200, parent=None):
-        super().__init__(parent)
-        self.port = port
-        self.baud = baud
-        self._running = True
-
-    def _read_exact(self, ser, n, deadline):
-        """读满 n 字节；超时返回 None。"""
-        buf = bytearray()
-        while len(buf) < n:
-            if not self._running:
-                return None
-            remain = deadline - time.monotonic()
-            if remain <= 0:
-                return None
-            chunk = ser.read(n - len(buf))
-            if chunk:
-                buf.extend(chunk)
-        return bytes(buf)
-
-    def run(self):
-        try:
-            # 拉模式用较大的 read 超时，让 read_exact 自行按 deadline 控制
-            ser = serial.Serial(self.port, self.baud, timeout=0.1,
-                                write_timeout=0.5)
-            # 显式拉 DTR/RTS，保证 OpenMV 的 usb.isconnected() 为 True
-            try:
-                ser.dtr = True
-                ser.rts = True
-            except Exception:
-                pass
-        except Exception as e:
-            self.status.emit(f"[OpenMV] 打开失败: {e}")
-            return
-        self.status.emit(f"[OpenMV] 已连接 {self.port}（拉模式）")
-
-        # 刚连上时把 OpenMV 可能缓存的老数据扔掉
-        try:
-            ser.reset_input_buffer()
-            ser.reset_output_buffer()
-        except Exception:
-            pass
-
-        timeout_cnt = 0
-        while self._running:
-            try:
-                # 1) 发请求（3 位或 4 位 token）
-                ser.write(b'snap')
-                try:
-                    ser.flush()
-                except Exception:
-                    pass
-                # 2) 读 Info
-                deadline = time.monotonic() + 1.0
-                info = self._read_exact(ser, self.INFO_SIZE, deadline)
-                if info is None:
-                    timeout_cnt += 1
-                    if timeout_cnt == 1 or timeout_cnt % 10 == 0:
-                        self.status.emit(
-                            f"[OpenMV] 无响应 {timeout_cnt} 次 "
-                            f"(确认 OpenMV IDE 已关闭 / 串口是否正确)")
-                    # 把可能残留的半包清掉，避免错位
-                    try:
-                        ser.reset_input_buffer()
-                    except Exception:
-                        pass
-                    self.msleep(80)
-                    continue
-                timeout_cnt = 0
-                found, dx, dy, cx, cy, bw, bh, img_w, img_h = struct.unpack(
-                    "<Bhhhhhhhh", info)
-                # 3) 读 JpegLen
-                jpeg_len_bytes = self._read_exact(ser, 4, deadline + 0.5)
-                if jpeg_len_bytes is None:
-                    self.status.emit("[OpenMV] 超时: 未收到 JpegLen，丢弃本帧")
-                    try:
-                        ser.reset_input_buffer()
-                    except Exception:
-                        pass
-                    continue
-                jpeg_len = struct.unpack("<I", jpeg_len_bytes)[0]
-                # 容错：非法长度（>1MB）直接丢弃并清空缓冲
-                if jpeg_len == 0 or jpeg_len > 1024 * 1024:
-                    self.status.emit(
-                        f"[OpenMV] 非法 jpeg_len={jpeg_len}，重新同步")
-                    try:
-                        ser.reset_input_buffer()
-                    except Exception:
-                        pass
-                    continue
-                # 4) 读 JPEG
-                jpeg = self._read_exact(ser, jpeg_len, deadline + 2.0)
-                if jpeg is None:
-                    self.status.emit(
-                        f"[OpenMV] 超时: 仅读到部分 JPEG ({jpeg_len}B)，丢弃")
-                    try:
-                        ser.reset_input_buffer()
-                    except Exception:
-                        pass
-                    continue
-                # 简单合法性校验：JPEG 起始 FFD8
-                if len(jpeg) < 4 or jpeg[:2] != b'\xff\xd8':
-                    self.status.emit(
-                        f"[OpenMV] JPEG 起始标记不匹配，重新同步")
-                    try:
-                        ser.reset_input_buffer()
-                    except Exception:
-                        pass
-                    continue
-
-                self.frame_received.emit({
-                    "jpeg": jpeg,
-                    "found": found,
-                    "dx": dx, "dy": dy,
-                    "cx": cx, "cy": cy,
-                    "w": bw, "h": bh,
-                    "img_w": img_w, "img_h": img_h,
-                })
-            except Exception as e:
-                self.status.emit(f"[OpenMV] 读取错误: {e}")
-                break
-
-        try:
-            ser.close()
-        except Exception:
-            pass
-        self.status.emit("[OpenMV] 已断开")
-
-    def stop(self):
-        self._running = False
-
-
-# ============================================================
-#                          主窗口
-# ============================================================
-class MainWindow(QMainWindow):
-    def __init__(self):
-        super().__init__()
-        self.setWindowTitle("云台追踪上位机 — MY_FOC")
-        self.resize(1100, 620)
-
-        self.openmv_thread = None
-
-        # --- 跳变检测用 ---
-        self._last_dx = None
-        self._last_dy = None
-        self._last_ts = None        # 上一帧 PC 时间戳
-        self._prev_ts = None        # 上上一帧时间戳（作为跳变起点）
-        self._jump_start_ts = None  # 本次跳变起点
-        self._in_tracking = False
-        self._last_capture_ms = 0.0
-        # --- 速度计算 ---
-        self._last_cx = None
-        self._last_cy = None
-        self._speed_px_s = 0.0
-
-        self._build_ui()
-        self.refresh_ports()
-
-    # ---------------- UI ----------------
-    def _build_ui(self):
-        central = QWidget()
-        self.setCentralWidget(central)
-        root = QVBoxLayout(central)
-        root.setContentsMargins(12, 12, 12, 12)
-        root.setSpacing(10)
-
-        # 顶部连接栏
-        top = QHBoxLayout()
-        self.cb_openmv = QComboBox(); self.cb_openmv.setMinimumWidth(220)
-        self.btn_refresh = QPushButton("刷新串口")
-        self.btn_conn_om = QPushButton("连接 OpenMV")
-        self.btn_refresh.clicked.connect(self.refresh_ports)
-        self.btn_conn_om.clicked.connect(self.toggle_openmv)
-
-
-        top.addWidget(QLabel("OpenMV 端口："));  top.addWidget(self.cb_openmv)
-        top.addWidget(self.btn_conn_om)
-        top.addStretch(1)
-        top.addWidget(self.btn_refresh)
-        root.addLayout(top)
-
-        # 主体：左图像 + 右数据
-        body = QHBoxLayout()
-        body.setSpacing(12)
-
-        # --- 左：图像区 ---
-        left_box = QGroupBox("实时图像 (OpenMV USB)")
-        left_lay = QVBoxLayout(left_box)
-        self.lbl_image = QLabel("等待图像…")
-        self.lbl_image.setAlignment(Qt.AlignCenter)
-        self.lbl_image.setMinimumSize(640, 480)
-        self.lbl_image.setStyleSheet(
-            "background-color:#1e1e1e; color:#888; border:1px solid #333; border-radius:6px;")
-        left_lay.addWidget(self.lbl_image)
-        self.lbl_fps = QLabel("FPS: --")
-        self.lbl_fps.setStyleSheet("color:#6cf;")
-        left_lay.addWidget(self.lbl_fps, 0, Qt.AlignRight)
-        body.addWidget(left_box, stretch=3)
-
-        # --- 右：数据面板 ---
-        right_box = QGroupBox("追踪数据")
-        right_lay = QVBoxLayout(right_box)
-        right_lay.setSpacing(10)
-
-        self.val = {}
-        def add_item(key, label_text):
-            card = QFrame()
-            card.setStyleSheet(
-                "QFrame{background:#2a2d34;border:1px solid #3a3f48;border-radius:8px;}")
-            lay = QVBoxLayout(card); lay.setContentsMargins(12, 8, 12, 8); lay.setSpacing(2)
-            t = QLabel(label_text); t.setStyleSheet("color:#9aa5b1;font-size:12px;")
-            v = QLabel("—");         v.setStyleSheet("color:#e6edf3;font-size:18px;font-weight:600;")
-            lay.addWidget(t); lay.addWidget(v)
-            self.val[key] = v
-            right_lay.addWidget(card)
-
-        add_item("img_center",  "图像中心点 (px)")
-        add_item("obj_center",  "物体中心点 (px)")
-        add_item("found",       "是否检测到物体")
-        add_item("speed",       "物体移动速度 (px/s)")
-        add_item("offset",      "x / y 轴偏移量 (px)")
-        add_item("capture",     "追上耗时 (ms)  · 跳变起点方案")
-
-        right_lay.addStretch(1)
-        body.addWidget(right_box, stretch=2)
-        root.addLayout(body)
-
-        # 状态栏
-        self.setStatusBar(QStatusBar())
-        self.statusBar().showMessage("就绪")
-
-        # 初始化固定项
-        self.val["img_center"].setText(f"({CENTER_X}, {CENTER_Y})")
-
-        # FPS 计时
-        self._fps_frames = 0
-        self._fps_t0 = time.time()
-        self._fps_timer = QTimer(self); self._fps_timer.timeout.connect(self._tick_fps)
-        self._fps_timer.start(500)
-
-        self._apply_style()
-
-    def _apply_style(self):
-        self.setStyleSheet("""
-            QMainWindow { background:#1b1d23; }
-            QGroupBox {
-                color:#c9d1d9; font-weight:600;
-                border:1px solid #333a44; border-radius:10px;
-                margin-top:12px; padding:8px;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin; left:12px; padding:0 6px;
-            }
-            QLabel { color:#c9d1d9; }
-            QPushButton {
-                background:#2f81f7; color:white; border:none; border-radius:6px;
-                padding:6px 14px; font-weight:600;
-            }
-            QPushButton:hover  { background:#4593ff; }
-            QPushButton:pressed{ background:#1f6feb; }
-            QComboBox {
-                background:#2a2d34; color:#e6edf3; border:1px solid #3a3f48;
-                border-radius:6px; padding:4px 8px; min-height:24px;
-            }
-            QStatusBar { color:#8b949e; }
-        """)
-
-    # ---------------- 端口管理 ----------------
-    def refresh_ports(self):
-        ports = [p.device + " — " + (p.description or "") for p in serial.tools.list_ports.comports()]
-        self.cb_openmv.clear()
-        if not ports:
-            self.cb_openmv.addItem("(无串口)")
-        else:
-            self.cb_openmv.addItems(ports)
-        self.statusBar().showMessage(f"找到 {len(ports)} 个串口")
-
-    def _selected_port(self, combo):
-        txt = combo.currentText()
-        if "—" in txt:
-            return txt.split("—", 1)[0].strip()
-        return txt.strip() if txt else ""
-
-    # ---------------- 连接切换 ----------------
-    def toggle_openmv(self):
-        if self.openmv_thread and self.openmv_thread.isRunning():
-            self.openmv_thread.stop(); self.openmv_thread.wait(1000)
-            self.openmv_thread = None
-            self.btn_conn_om.setText("连接 OpenMV")
-            return
-        port = self._selected_port(self.cb_openmv)
-        if not port or port.startswith("("):
-            self.statusBar().showMessage("请先选择 OpenMV 串口"); return
-        self.openmv_thread = OpenMVReader(port)
-        self.openmv_thread.frame_received.connect(self.on_openmv_frame)
-        self.openmv_thread.status.connect(self.statusBar().showMessage)
-        self.openmv_thread.start()
-        self.btn_conn_om.setText("断开 OpenMV")
-
-    # ---------------- 数据回调 ----------------
-    def on_openmv_frame(self, f):
-        # 1) 显示 JPEG
-        img = QImage.fromData(f["jpeg"], "JPG")
-        if not img.isNull():
-            pm = QPixmap.fromImage(img).scaled(
-                self.lbl_image.width(), self.lbl_image.height(),
-                Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            self.lbl_image.setPixmap(pm)
-            self._fps_frames += 1
-
-        # 2) 更新数据
-        found = f["found"]; dx = f["dx"]; dy = f["dy"]
-        cx = f["cx"]; cy = f["cy"]
-
-        self.val["obj_center"].setText(f"({cx}, {cy})" if found else "—")
-        self.val["found"].setText("✅ FOUND" if found else "❌ LOST")
-        self.val["found"].setStyleSheet(
-            "color:#3fb950;font-size:18px;font-weight:700;" if found
-            else "color:#f85149;font-size:18px;font-weight:700;")
-        self.val["offset"].setText(f"dx = {dx:+d}   dy = {dy:+d}")
-
-        now = time.monotonic()
-
-        # 3) 速度（像素/秒）：仅在连续找到目标时才计算
-        if found and self._last_cx is not None and self._last_ts is not None:
-            dt = now - self._last_ts
-            if dt > 1e-4:
-                import math
-                dist = math.hypot(cx - self._last_cx, cy - self._last_cy)
-                self._speed_px_s = dist / dt
-        if found:
-            self._last_cx, self._last_cy = cx, cy
-        else:
-            self._last_cx = self._last_cy = None
-            self._speed_px_s = 0.0
-        self.val["speed"].setText(f"{self._speed_px_s:7.1f}")
-
-        # 4) 位置跳变检测 & 捕获耗时
-        #    跳变条件：|dx - last_dx| > TH 或 |dy - last_dy| > TH
-        #    起点：跳变帧的上一帧时间戳（prev_ts）
-        #    终点：首次 |dx|,|dy| 同 <LOCK_TH
-        if self._last_dx is not None:
-            ddx = abs(dx - self._last_dx); ddy = abs(dy - self._last_dy)
-            if (ddx > JUMP_TH_DIFF or ddy > JUMP_TH_DIFF):
-                # 发生跳变 → 开始追的起点是上一帧时间
-                self._jump_start_ts = self._prev_ts if self._prev_ts is not None else self._last_ts
-                self._in_tracking = True
-
-        if self._in_tracking and self._jump_start_ts is not None:
-            if abs(dx) < LOCK_TH and abs(dy) < LOCK_TH and found:
-                self._last_capture_ms = (now - self._jump_start_ts) * 1000.0
-                self._in_tracking = False
-                self._jump_start_ts = None
-
-        status_txt = "追踪中…" if self._in_tracking else "已锁定"
-        self.val["capture"].setText(
-            f"{self._last_capture_ms:7.1f}   ({status_txt})")
-
-        # 保存历史时间戳
-        self._prev_ts = self._last_ts
-        self._last_ts = now
-        self._last_dx, self._last_dy = dx, dy
-
-    # ---------------- FPS ----------------
-    def _tick_fps(self):
-        t = time.time(); dt = t - self._fps_t0
-        if dt > 0:
-            self.lbl_fps.setText(f"FPS: {self._fps_frames/dt:5.1f}")
-        self._fps_frames = 0; self._fps_t0 = t
-
-    # ---------------- 关闭 ----------------
-    def closeEvent(self, e):
-        if self.openmv_thread and self.openmv_thread.isRunning():
-            self.openmv_thread.stop(); self.openmv_thread.wait(1000)
+        if self.motor_serial.is_connected:
+            self.motor_serial.disconnect()
         super().closeEvent(e)
 
 
